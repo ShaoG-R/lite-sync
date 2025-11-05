@@ -83,6 +83,22 @@ impl SingleWaiterNotify {
     /// 如果已经被通知则返回 true（快速路径）
     #[inline]
     fn register_waker(&self, waker: &std::task::Waker) -> bool {
+        // CRITICAL: Register waker FIRST, before changing state to WAITING
+        // This prevents the race where notify_one() sees WAITING but waker isn't registered yet
+        //
+        // 关键：先注册 waker，再将状态改为 WAITING
+        // 这可以防止 notify_one() 看到 WAITING 但 waker 还未注册的竞态条件
+        self.waker.register(waker);
+        
+        let current_state = self.state.load(Ordering::Acquire);
+        
+        // Fast path: already notified
+        if current_state == NOTIFIED {
+            // Reset to EMPTY for next wait
+            self.state.store(EMPTY, Ordering::Release);
+            return true;
+        }
+        
         // Try to transition from EMPTY to WAITING
         match self.state.compare_exchange(
             EMPTY,
@@ -91,21 +107,25 @@ impl SingleWaiterNotify {
             Ordering::Acquire,
         ) {
             Ok(_) => {
-                // Successfully transitioned, store the waker
-                self.waker.register(waker);
-                false // Not notified yet
+                // Successfully transitioned to WAITING
+                // Check if we were notified immediately after setting WAITING
+                if self.state.load(Ordering::Acquire) == NOTIFIED {
+                    // Race: notified between CAS and this check
+                    self.state.store(EMPTY, Ordering::Release);
+                    true
+                } else {
+                    false
+                }
             }
             Err(state) => {
-                // Already notified or waiting
+                // State changed, check what it is now
                 if state == NOTIFIED {
-                    // Reset to EMPTY for next wait
+                    // Already notified
                     self.state.store(EMPTY, Ordering::Release);
-                    true // Already notified
+                    true
                 } else {
-                    // State is WAITING, update the waker
-                    self.waker.register(waker);
-                    
-                    // Check if notified while we were updating waker
+                    // State is WAITING (subsequent poll updating waker)
+                    // Check if notified after waker update
                     if self.state.load(Ordering::Acquire) == NOTIFIED {
                         self.state.store(EMPTY, Ordering::Release);
                         true
@@ -150,7 +170,10 @@ impl Future for Notified<'_> {
                 return Poll::Ready(());
             }
             // Update waker in case it changed
-            self.notify.register_waker(cx.waker());
+            // IMPORTANT: Check return value - may have been notified during registration
+            if self.notify.register_waker(cx.waker()) {
+                return Poll::Ready(());
+            }
         }
         
         Poll::Pending
