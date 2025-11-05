@@ -533,8 +533,21 @@ impl<T, const N: usize> Receiver<T, N> {
                 Ok(value)
             }
             Err(smallring::PopError::Empty) => {
+                // Check if channel is closed
+                // 检查通道是否已关闭
                 if self.inner.closed.load(Ordering::Acquire) {
-                    Err(TryRecvError::Closed)
+                    // Double-check for remaining items to avoid race condition
+                    // where sender drops after push but before we check closed flag
+                    // 再次检查是否有剩余项，以避免发送方在 push 后但在我们检查 closed 标志前 drop 的竞态条件
+                    match consumer.pop() {
+                        Ok(value) => {
+                            self.inner.send_notify.notify_one();
+                            Ok(value)
+                        }
+                        Err(smallring::PopError::Empty) => {
+                            Err(TryRecvError::Closed)
+                        }
+                    }
                 } else {
                     Err(TryRecvError::Empty)
                 }
