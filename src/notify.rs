@@ -7,7 +7,6 @@
 /// 
 /// 为 SPSC（单生产者单消费者）模式优化，其中每次只有一个任务等待。
 /// 比 tokio::sync::Notify 更轻量。
-
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::future::Future;
 use std::pin::Pin;
@@ -26,6 +25,12 @@ const NOTIFIED: u8 = 2;   // Notification sent
 pub struct SingleWaiterNotify {
     state: AtomicU8,
     waker: AtomicWaker,
+}
+
+impl Default for SingleWaiterNotify {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SingleWaiterNotify {

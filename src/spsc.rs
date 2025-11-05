@@ -35,7 +35,6 @@
 /// 5. **Type System Enforcement**: SPSC semantics are enforced by the type system, preventing misuse as MPMC
 ///
 /// This design achieves zero synchronization overhead, completely eliminating `Mutex` performance costs.
-
 use std::cell::UnsafeCell;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -346,6 +345,14 @@ impl<T, const N: usize> Sender<T, N> {
         // slots 只读取数据，不需要可变访问
         let producer = unsafe { &*self.inner.producer.get() };
         producer.slots()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        // SAFETY: Sender 不实现 Clone，因此只有一个 Sender 实例
+        // is_empty 只读取数据，不需要可变访问
+        let producer = unsafe { &*self.inner.producer.get() };
+        producer.is_empty()
     }
     
     /// Get the number of free slots in the channel

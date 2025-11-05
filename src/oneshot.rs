@@ -379,11 +379,10 @@ impl<T: State> Future for Receiver<T> {
         
         // Fast path: check if already completed
         let current = this.inner.state.load(Ordering::Acquire);
-        if let Some(state) = T::from_u8(current) {
-            if current != T::pending_value() {
+        if let Some(state) = T::from_u8(current)
+            && current != T::pending_value() {
                 return Poll::Ready(state);
             }
-        }
         
         // Slow path: register waker for notification
         this.inner.register_waker(cx.waker());
@@ -391,11 +390,10 @@ impl<T: State> Future for Receiver<T> {
         // Check again after registering waker to avoid race condition
         // The sender might have completed between our first check and waker registration
         let current = this.inner.state.load(Ordering::Acquire);
-        if let Some(state) = T::from_u8(current) {
-            if current != T::pending_value() {
+        if let Some(state) = T::from_u8(current)
+            && current != T::pending_value() {
                 return Poll::Ready(state);
             }
-        }
         
         Poll::Pending
     }

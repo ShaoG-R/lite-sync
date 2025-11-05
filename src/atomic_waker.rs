@@ -9,7 +9,6 @@
 /// 基于 Tokio 的 AtomicWaker 但为我们的用例简化。
 /// 使用 UnsafeCell<Option<Waker>> + 原子状态机避免 Box 分配
 /// 同时保持安全的并发访问。
-
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Waker;
