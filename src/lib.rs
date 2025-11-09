@@ -87,12 +87,33 @@
 //! 基于 Tokio 的 `AtomicWaker` 但为特定用例简化。
 //! 提供对 waker 的安全并发访问，无需 Box 分配。
 //! 
+//! ### [`request_response`]
+//! 
+//! Bidirectional request-response channels.
+//! 
+//! 双向请求-响应通道。
+//! 
+//! Provides request-response communication patterns optimized for different use cases.
+//! Currently supports one-to-one communication where side A sends requests and side B
+//! must respond before A can send the next request. No buffer needed due to strict
+//! turn-taking.
+//! 
+//! 提供针对不同用例优化的请求-响应通信模式。
+//! 目前支持一对一通信，A方发送请求，B方必须响应后A方才能发送下一个请求。
+//! 由于严格的轮流机制，无需缓冲区。
+//! 
+//! **Key optimizations / 关键优化**:
+//! - Lock-free atomic state machine / 无锁原子状态机
+//! - Zero buffer allocation (strict request-response) / 零缓冲区分配（严格请求-响应）
+//! - Dual waker storage for both ends / 双端waker存储
+//! - Type-safe one-to-one communication / 类型安全的一对一通信
+//! 
 //! ## Examples / 示例
 //! 
 //! ### One-shot completion with custom state
 //! 
 //! ```
-//! use lite_sync::oneshot::{State, Sender};
+//! use lite_sync::oneshot::lite::{State, Sender};
 //! 
 //! #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 //! enum TaskResult {
@@ -175,6 +196,28 @@
 //! # });
 //! ```
 //! 
+//! ### Request-response channel
+//! 
+//! ```
+//! use lite_sync::request_response::one_to_one::channel;
+//! 
+//! # tokio_test::block_on(async {
+//! let (side_a, side_b) = channel::<String, i32>();
+//! 
+//! // Side B: Echo server
+//! tokio::spawn(async move {
+//!     while let Ok(guard) = side_b.recv_request().await {
+//!         let response = guard.request().len() as i32;
+//!         guard.reply(response);
+//!     }
+//! });
+//! 
+//! // Side A: Send requests
+//! let len = side_a.request("Hello".to_string()).await.unwrap();
+//! assert_eq!(len, 5);
+//! # });
+//! ```
+//! 
 //! ## Safety / 安全性
 //! 
 //! All primitives use `unsafe` internally for performance but expose safe APIs.
@@ -197,3 +240,4 @@ pub mod notify;
 pub mod atomic_waker;
 pub mod oneshot;
 pub mod spsc;
+pub mod request_response;

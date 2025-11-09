@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::sync::mpsc;
-use lite_sync::oneshot::channel;
+use lite_sync::oneshot::lite::channel;
 use lite_sync::spsc;
 
 /// Benchmark: Oneshot creation comparison (custom Notify+AtomicU8 vs tokio oneshot)
