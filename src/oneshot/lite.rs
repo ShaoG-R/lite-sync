@@ -6,6 +6,20 @@ use std::task::{Context, Poll};
 
 use crate::atomic_waker::AtomicWaker;
 
+/// Error returned when the sender is dropped before sending a value
+/// 
+/// 当发送器在发送值之前被丢弃时返回的错误
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendError;
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sender dropped")
+    }
+}
+
+impl std::error::Error for SendError {}
+
 /// Trait for types that can be used as oneshot state
 /// 
 /// Types implementing this trait can be converted to/from u8 for atomic storage.
@@ -53,6 +67,10 @@ use crate::atomic_waker::AtomicWaker;
 ///     fn pending_value() -> u8 {
 ///         0
 ///     }
+///     
+///     fn closed_value() -> u8 {
+///         255
+///     }
 /// }
 /// 
 /// # tokio_test::block_on(async {
@@ -62,7 +80,7 @@ use crate::atomic_waker::AtomicWaker;
 ///     notifier.notify(CustomState::Success);
 /// });
 /// let result = receiver.await; // Direct await
-/// assert_eq!(result, CustomState::Success);
+/// assert_eq!(result, Ok(CustomState::Success));
 /// # });
 /// ```
 pub trait State: Sized + Send + Sync + 'static {
@@ -84,6 +102,11 @@ pub trait State: Sized + Send + Sync + 'static {
     /// 
     /// 待处理状态值（完成前）
     fn pending_value() -> u8;
+    
+    /// The closed state value (sender was dropped without sending)
+    /// 
+    /// 已关闭状态值（发送器被丢弃而未发送）
+    fn closed_value() -> u8;
 }
 
 /// Implementation for unit type () - simple completion notification without state
@@ -106,6 +129,11 @@ impl State for () {
     #[inline]
     fn pending_value() -> u8 {
         0 // Pending
+    }
+    
+    #[inline]
+    fn closed_value() -> u8 {
+        255 // Closed
     }
 }
 
@@ -245,6 +273,30 @@ impl<T: State> Sender<T> {
     }
 }
 
+impl<T: State> Drop for Sender<T> {
+    fn drop(&mut self) {
+        // Mark the channel as closed when sender is dropped, but only if no value was sent
+        // This allows receivers to detect that the sender is gone
+        // and return an error instead of waiting forever
+        //
+        // 当发送器被丢弃时标记通道为已关闭，但仅在没有发送值时
+        // 这允许接收器检测到发送器已消失
+        // 并返回错误而不是永远等待
+        
+        // Try to transition from PENDING to CLOSED
+        // If this fails, it means a value was already sent, so we don't need to do anything
+        if self.inner.state.compare_exchange(
+            T::pending_value(),
+            T::closed_value(),
+            Ordering::Release,
+            Ordering::Acquire,
+        ).is_ok() {
+            // Successfully marked as closed, wake any waiting receiver
+            self.inner.waker.wake();
+        }
+    }
+}
+
 /// Completion receiver for one-shot tasks
 /// 
 /// Implements `Future` directly, allowing direct `.await` usage on both owned values and mutable references
@@ -270,7 +322,7 @@ impl<T: State> Sender<T> {
 /// 
 /// // Two equivalent ways to await:
 /// let result = receiver.await;               // Direct await via Future impl
-/// assert_eq!(result, ());
+/// assert_eq!(result, Ok(()));
 /// # });
 /// ```
 /// 
@@ -289,7 +341,7 @@ impl<T: State> Sender<T> {
 /// 
 /// // Can also await on &mut receiver
 /// let result = (&mut receiver).await;
-/// assert_eq!(result, ());
+/// assert_eq!(result, Ok(()));
 /// # });
 /// ```
 /// 
@@ -326,6 +378,10 @@ impl<T: State> Sender<T> {
 ///     fn pending_value() -> u8 {
 ///         0
 ///     }
+///     
+///     fn closed_value() -> u8 {
+///         255
+///     }
 /// }
 /// 
 /// # tokio_test::block_on(async {
@@ -336,9 +392,10 @@ impl<T: State> Sender<T> {
 /// });
 /// 
 /// match receiver.await {
-///     CustomState::Success => { /* Success! */ },
-///     CustomState::Failure => { /* Failed */ },
-///     CustomState::Timeout => { /* Timed out */ },
+///     Ok(CustomState::Success) => { /* Success! */ },
+///     Ok(CustomState::Failure) => { /* Failed */ },
+///     Ok(CustomState::Timeout) => { /* Timed out */ },
+///     Err(_) => { /* Sender dropped */ },
 /// }
 /// # });
 /// ```
@@ -367,22 +424,59 @@ impl<T: State> Unpin for Receiver<T> {}
 // 无需显式的 drop 实现
 
 impl<T: State> Receiver<T> {
-    /// Wait for task completion asynchronously
+    /// Receive a value asynchronously
     /// 
     /// This is equivalent to using `.await` directly on the receiver
     /// 
-    /// 异步等待任务完成
+    /// Returns `Err(SendError)` if the sender was dropped before sending a value
+    /// 
+    /// 异步接收一个值
     /// 
     /// 这等同于直接在 receiver 上使用 `.await`
     /// 
+    /// 如果发送器在发送值之前被丢弃则返回 `Err(SendError)`
+    /// 
     /// # Returns
-    /// Returns the completion state
+    /// Returns the completion state or error if sender was dropped
     /// 
     /// # 返回值
-    /// 返回完成状态
+    /// 返回完成状态或发送器被丢弃时的错误
     #[inline]
-    pub async fn wait(self) -> T {
+    pub async fn recv(self) -> Result<T, SendError> {
         self.await
+    }
+    
+    /// Try to receive a value without blocking
+    /// 
+    /// Returns `None` if no value has been sent yet
+    /// Returns `Err(SendError)` if the sender was dropped
+    /// 
+    /// 尝试接收值而不阻塞
+    /// 
+    /// 如果还没有发送值则返回 `None`
+    /// 如果发送器被丢弃则返回 `Err(SendError)`
+    /// 
+    /// # Returns
+    /// Returns `Some(value)` if value is ready, `None` if pending, or `Err(SendError)` if sender dropped
+    /// 
+    /// # 返回值
+    /// 如果值已就绪返回 `Some(value)`，如果待处理返回 `None`，如果发送器被丢弃返回 `Err(SendError)`
+    #[inline]
+    pub fn try_recv(&mut self) -> Result<Option<T>, SendError> {
+        let current = self.inner.state.load(Ordering::Acquire);
+        
+        // Check if sender was dropped
+        if current == T::closed_value() {
+            return Err(SendError);
+        }
+        
+        // Check if value is ready
+        if let Some(state) = T::from_u8(current)
+            && current != T::pending_value() {
+                return Ok(Some(state));
+            }
+        
+        Ok(None)
     }
 }
 
@@ -394,6 +488,7 @@ impl<T: State> Receiver<T> {
 /// - Fast path: Immediate return if already completed (no allocation)
 /// - Slow path: Direct waker registration (no Box allocation, just copy two pointers)
 /// - No intermediate future state needed
+/// - Detects when sender is dropped and returns error
 /// 
 /// 为 Receiver 直接实现 Future
 /// 
@@ -403,18 +498,25 @@ impl<T: State> Receiver<T> {
 /// - 快速路径：如已完成则立即返回（无分配）
 /// - 慢速路径：直接注册 waker（无 Box 分配，只复制两个指针）
 /// - 无需中间 future 状态
+/// - 检测发送器何时被丢弃并返回错误
 impl<T: State> Future for Receiver<T> {
-    type Output = T;
+    type Output = Result<T, SendError>;
     
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: Receiver is Unpin, so we can safely get a mutable reference
         let this = self.get_mut();
         
-        // Fast path: check if already completed
+        // Fast path: check if already completed or closed
         let current = this.inner.state.load(Ordering::Acquire);
+        
+        // Check if sender was dropped
+        if current == T::closed_value() {
+            return Poll::Ready(Err(SendError));
+        }
+        
         if let Some(state) = T::from_u8(current)
             && current != T::pending_value() {
-                return Poll::Ready(state);
+                return Poll::Ready(Ok(state));
             }
         
         // Slow path: register waker for notification
@@ -423,9 +525,15 @@ impl<T: State> Future for Receiver<T> {
         // Check again after registering waker to avoid race condition
         // The sender might have completed between our first check and waker registration
         let current = this.inner.state.load(Ordering::Acquire);
+        
+        // Check if sender was dropped
+        if current == T::closed_value() {
+            return Poll::Ready(Err(SendError));
+        }
+        
         if let Some(state) = T::from_u8(current)
             && current != T::pending_value() {
-                return Poll::Ready(state);
+                return Poll::Ready(Ok(state));
             }
         
         Poll::Pending
@@ -471,6 +579,10 @@ mod tests {
         fn pending_value() -> u8 {
             0
         }
+        
+        fn closed_value() -> u8 {
+            255
+        }
     }
     
     #[tokio::test]
@@ -482,8 +594,8 @@ mod tests {
             notifier.notify(TestCompletion::Called);
         });
         
-        let result = receiver.wait().await;
-        assert_eq!(result, TestCompletion::Called);
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(TestCompletion::Called));
     }
     
     #[tokio::test]
@@ -495,8 +607,8 @@ mod tests {
             notifier.notify(TestCompletion::Cancelled);
         });
         
-        let result = receiver.wait().await;
-        assert_eq!(result, TestCompletion::Cancelled);
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(TestCompletion::Cancelled));
     }
     
     #[tokio::test]
@@ -506,8 +618,8 @@ mod tests {
         // Notify before waiting (fast path)
         notifier.notify(TestCompletion::Called);
         
-        let result = receiver.wait().await;
-        assert_eq!(result, TestCompletion::Called);
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(TestCompletion::Called));
     }
     
     #[tokio::test]
@@ -517,8 +629,8 @@ mod tests {
         // Notify before waiting (fast path)
         notifier.notify(TestCompletion::Cancelled);
         
-        let result = receiver.wait().await;
-        assert_eq!(result, TestCompletion::Cancelled);
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(TestCompletion::Cancelled));
     }
     
     // Test with custom state type
@@ -550,6 +662,10 @@ mod tests {
         fn pending_value() -> u8 {
             0
         }
+        
+        fn closed_value() -> u8 {
+            255
+        }
     }
     
     #[tokio::test]
@@ -561,8 +677,8 @@ mod tests {
             notifier.notify(CustomState::Success);
         });
         
-        let result = receiver.wait().await;
-        assert_eq!(result, CustomState::Success);
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(CustomState::Success));
     }
     
     #[tokio::test]
@@ -572,8 +688,8 @@ mod tests {
         // Immediate notification
         notifier.notify(CustomState::Timeout);
         
-        let result = receiver.wait().await;
-        assert_eq!(result, CustomState::Timeout);
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(CustomState::Timeout));
     }
     
     #[tokio::test]
@@ -585,8 +701,8 @@ mod tests {
             notifier.notify(());
         });
         
-        let result = receiver.wait().await;
-        assert_eq!(result, ());
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(()));
     }
     
     #[tokio::test]
@@ -596,8 +712,8 @@ mod tests {
         // Immediate notification (fast path)
         notifier.notify(());
         
-        let result = receiver.wait().await;
-        assert_eq!(result, ());
+        let result = receiver.recv().await;
+        assert_eq!(result, Ok(()));
     }
     
     // Tests for Future implementation (direct await)
@@ -612,7 +728,7 @@ mod tests {
         
         // Direct await without .wait()
         let result = receiver.await;
-        assert_eq!(result, TestCompletion::Called);
+        assert_eq!(result, Ok(TestCompletion::Called));
     }
     
     #[tokio::test]
@@ -624,7 +740,7 @@ mod tests {
         
         // Direct await
         let result = receiver.await;
-        assert_eq!(result, TestCompletion::Cancelled);
+        assert_eq!(result, Ok(TestCompletion::Cancelled));
     }
     
     #[tokio::test]
@@ -638,7 +754,7 @@ mod tests {
         
         // Direct await with unit type
         let result = receiver.await;
-        assert_eq!(result, ());
+        assert_eq!(result, Ok(()));
     }
     
     #[tokio::test]
@@ -652,7 +768,7 @@ mod tests {
         
         // Direct await with custom state
         let result = receiver.await;
-        assert_eq!(result, CustomState::Failure);
+        assert_eq!(result, Ok(CustomState::Failure));
     }
     
     // Test awaiting on &mut receiver
@@ -667,7 +783,7 @@ mod tests {
         
         // Await on mutable reference
         let result = (&mut receiver).await;
-        assert_eq!(result, TestCompletion::Called);
+        assert_eq!(result, Ok(TestCompletion::Called));
     }
     
     #[tokio::test]
@@ -679,7 +795,78 @@ mod tests {
         
         // Await on mutable reference (fast path)
         let result = (&mut receiver).await;
-        assert_eq!(result, ());
+        assert_eq!(result, Ok(()));
+    }
+    
+    // Tests for try_recv
+    #[tokio::test]
+    async fn test_oneshot_try_recv_pending() {
+        let (_notifier, mut receiver) = Sender::<TestCompletion>::new();
+        
+        // Try receive before sending
+        let result = receiver.try_recv();
+        assert_eq!(result, Ok(None));
+    }
+    
+    #[tokio::test]
+    async fn test_oneshot_try_recv_ready() {
+        let (notifier, mut receiver) = Sender::<TestCompletion>::new();
+        
+        // Send value
+        notifier.notify(TestCompletion::Called);
+        
+        // Try receive after sending
+        let result = receiver.try_recv();
+        assert_eq!(result, Ok(Some(TestCompletion::Called)));
+    }
+    
+    #[tokio::test]
+    async fn test_oneshot_try_recv_sender_dropped() {
+        let (notifier, mut receiver) = Sender::<TestCompletion>::new();
+        
+        // Drop sender without sending
+        drop(notifier);
+        
+        // Try receive should return error
+        let result = receiver.try_recv();
+        assert_eq!(result, Err(SendError));
+    }
+    
+    // Tests for sender dropped behavior
+    #[tokio::test]
+    async fn test_oneshot_sender_dropped_before_recv() {
+        let (notifier, receiver) = Sender::<TestCompletion>::new();
+        
+        // Drop sender without sending
+        drop(notifier);
+        
+        // Recv should return error
+        let result = receiver.recv().await;
+        assert_eq!(result, Err(SendError));
+    }
+    
+    #[tokio::test]
+    async fn test_oneshot_sender_dropped_unit_type() {
+        let (notifier, receiver) = Sender::<()>::new();
+        
+        // Drop sender without sending
+        drop(notifier);
+        
+        // Recv should return error
+        let result = receiver.recv().await;
+        assert_eq!(result, Err(SendError));
+    }
+    
+    #[tokio::test]
+    async fn test_oneshot_sender_dropped_custom_state() {
+        let (notifier, receiver) = Sender::<CustomState>::new();
+        
+        // Drop sender without sending
+        drop(notifier);
+        
+        // Recv should return error
+        let result = receiver.recv().await;
+        assert_eq!(result, Err(SendError));
     }
 }
 

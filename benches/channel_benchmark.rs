@@ -49,7 +49,7 @@ fn bench_oneshot_send_recv_comparison(c: &mut Criterion) {
                 
                 // Send and receive
                 notifier.notify(());
-                let _value = receiver.wait().await;
+                let _value = receiver.recv().await;
                 
                 total_duration += start.elapsed();
             }
@@ -115,7 +115,7 @@ fn bench_oneshot_batch_comparison(c: &mut Criterion) {
                         
                         // Receive all
                         for ch in channels {
-                            let _value = ch.1.wait().await;
+                            let _value = ch.1.recv().await;
                         }
                         
                         total_duration += start.elapsed();
@@ -188,7 +188,7 @@ fn bench_oneshot_cross_task_comparison(c: &mut Criterion) {
                 
                 // Spawn receiver task
                 let receiver_handle = tokio::spawn(async move {
-                    receiver.wait().await
+                    receiver.recv().await
                 });
                 
                 // Send from main task
@@ -258,7 +258,7 @@ fn bench_oneshot_immediate_notification(c: &mut Criterion) {
                 notifier.notify(());
                 
                 // Receive (should complete immediately via fast path)
-                let _value = receiver.wait().await;
+                let _value = receiver.recv().await;
                 
                 total_duration += start.elapsed();
             }

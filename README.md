@@ -37,7 +37,9 @@ One-shot completion notification with customizable state.
 
 Perfect for signaling task completion with minimal overhead. Supports custom state types through the `State` trait, allowing you to communicate not just "done" but also "how it finished" (success, failure, timeout, etc.).
 
-**Key optimizations**:
+**Key features**:
+- Returns `Result<T, SendError>` - detects when sender is dropped
+- Provides `recv()` async method and `try_recv()` non-blocking method
 - Zero Box allocation for waker storage
 - Direct `Future` implementation for ergonomic `.await`
 - Fast path for immediate completion
@@ -96,6 +98,7 @@ impl State for TaskResult {
     }
     
     fn pending_value() -> u8 { 0 }
+    fn closed_value() -> u8 { 255 }
 }
 
 #[tokio::main]
@@ -107,8 +110,12 @@ async fn main() {
         sender.notify(TaskResult::Success);
     });
     
-    let result = receiver.await;
-    assert_eq!(result, TaskResult::Success);
+    // Use recv() to receive asynchronously, or direct .await
+    match receiver.recv().await {
+        Ok(TaskResult::Success) => println!("Task succeeded"),
+        Ok(TaskResult::Error) => println!("Task failed"),
+        Err(_) => println!("Sender dropped"),
+    }
 }
 ```
 
@@ -171,7 +178,11 @@ async fn main() {
         sender.notify(());
     });
     
-    receiver.await; // Wait for completion
+    // Use recv() or direct .await, returns Result
+    match receiver.recv().await {
+        Ok(()) => println!("Task completed"),
+        Err(_) => println!("Sender dropped"),
+    }
 }
 ```
 

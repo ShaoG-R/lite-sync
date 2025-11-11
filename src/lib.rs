@@ -138,6 +138,8 @@
 //!     }
 //!     
 //!     fn pending_value() -> u8 { 0 }
+//!     
+//!     fn closed_value() -> u8 { 255 }
 //! }
 //! 
 //! # tokio_test::block_on(async {
@@ -149,7 +151,7 @@
 //! });
 //! 
 //! let result = receiver.await;
-//! assert_eq!(result, TaskResult::Success);
+//! assert_eq!(result, Ok(TaskResult::Success));
 //! # });
 //! ```
 //! 

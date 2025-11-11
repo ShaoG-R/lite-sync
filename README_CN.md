@@ -37,7 +37,9 @@ lite-sync = "0.1"
 
 非常适合以最小开销发出任务完成信号。通过 `State` trait 支持自定义状态类型，允许您不仅传达"完成"，还能传达"如何完成"（成功、失败、超时等）。
 
-**关键优化**：
+**关键特性**：
+- 返回 `Result<T, SendError>`，当发送器被丢弃时返回错误
+- 提供 `recv()` 异步方法和 `try_recv()` 非阻塞方法
 - Waker 存储零 Box 分配
 - 直接实现 `Future` 以支持便捷的 `.await`
 - 立即完成的快速路径
@@ -96,6 +98,7 @@ impl State for TaskResult {
     }
     
     fn pending_value() -> u8 { 0 }
+    fn closed_value() -> u8 { 255 }
 }
 
 #[tokio::main]
@@ -107,8 +110,12 @@ async fn main() {
         sender.notify(TaskResult::Success);
     });
     
-    let result = receiver.await;
-    assert_eq!(result, TaskResult::Success);
+    // 使用 recv() 异步接收，或直接 .await
+    match receiver.recv().await {
+        Ok(TaskResult::Success) => println!("任务成功"),
+        Ok(TaskResult::Error) => println!("任务失败"),
+        Err(_) => println!("发送器已丢弃"),
+    }
 }
 ```
 
@@ -171,7 +178,11 @@ async fn main() {
         sender.notify(());
     });
     
-    receiver.await; // 等待完成
+    // 使用 recv() 或直接 .await，返回 Result
+    match receiver.recv().await {
+        Ok(()) => println!("任务完成"),
+        Err(_) => println!("发送器已丢弃"),
+    }
 }
 ```
 
