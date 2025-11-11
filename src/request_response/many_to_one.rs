@@ -57,6 +57,16 @@ struct Inner<Req, Resp> {
     b_waker: crate::atomic_waker::AtomicWaker,
 }
 
+impl<Req, Resp> std::fmt::Debug for Inner<Req, Resp> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sender_count = self.sender_count.load(Ordering::Acquire);
+        f.debug_struct("Inner")
+            .field("b_closed", &self.is_b_closed())
+            .field("sender_count", &sender_count)
+            .finish()
+    }
+}
+
 impl<Req, Resp> Inner<Req, Resp> {
     /// Create new shared state
     /// 
@@ -87,6 +97,14 @@ pub struct SideA<Req, Resp> {
     inner: Arc<Inner<Req, Resp>>,
 }
 
+impl<Req, Resp> std::fmt::Debug for SideA<Req, Resp> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SideA")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 impl<Req, Resp> Clone for SideA<Req, Resp> {
     fn clone(&self) -> Self {
         // Increment sender count with Relaxed (reads will use Acquire)
@@ -113,6 +131,14 @@ impl<Req, Resp> Drop for SideA<Req, Resp> {
 /// B 方的 channel 端点（请求接收方，响应发送方）- 单实例
 pub struct SideB<Req, Resp> {
     inner: Arc<Inner<Req, Resp>>,
+}
+
+impl<Req, Resp> std::fmt::Debug for SideB<Req, Resp> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SideB")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 /// Create a new many-to-one request-response channel

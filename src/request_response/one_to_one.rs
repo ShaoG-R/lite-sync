@@ -59,6 +59,23 @@ struct Inner<Req, Resp> {
 unsafe impl<Req: Send, Resp: Send> Send for Inner<Req, Resp> {}
 unsafe impl<Req: Send, Resp: Send> Sync for Inner<Req, Resp> {}
 
+impl<Req, Resp> std::fmt::Debug for Inner<Req, Resp> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.current_state();
+        let state_str = match state {
+            IDLE => "Idle",
+            WAITING_RESPONSE => "WaitingResponse",
+            RESPONSE_READY => "ResponseReady",
+            _ => "Unknown",
+        };
+        f.debug_struct("Inner")
+            .field("state", &state_str)
+            .field("a_closed", &self.is_a_closed())
+            .field("b_closed", &self.is_b_closed())
+            .finish()
+    }
+}
+
 impl<Req, Resp> Inner<Req, Resp> {
     /// Create new channel internal state
     /// 
@@ -137,11 +154,27 @@ pub struct SideA<Req, Resp> {
     inner: Arc<Inner<Req, Resp>>,
 }
 
+impl<Req, Resp> std::fmt::Debug for SideA<Req, Resp> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SideA")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 /// Side B endpoint (request receiver, response sender)
 /// 
 /// B 方的 channel 端点（请求接收方，响应发送方）
 pub struct SideB<Req, Resp> {
     inner: Arc<Inner<Req, Resp>>,
+}
+
+impl<Req, Resp> std::fmt::Debug for SideB<Req, Resp> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SideB")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 /// Create a new request-response channel

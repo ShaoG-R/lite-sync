@@ -134,6 +134,17 @@ pub(crate) struct Inner<T: State> {
     _marker: std::marker::PhantomData<T>,
 }
 
+impl<T: State> std::fmt::Debug for Inner<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.load(std::sync::atomic::Ordering::Acquire);
+        let is_pending = state == T::pending_value();
+        f.debug_struct("Inner")
+            .field("state", &state)
+            .field("is_pending", &is_pending)
+            .finish()
+    }
+}
+
 impl<T: State> Inner<T> {
     /// Create a new oneshot inner state
     /// 
@@ -189,6 +200,17 @@ impl<T: State> Inner<T> {
 /// 一次性任务完成通知器
 pub struct Sender<T: State> {
     inner: Arc<Inner<T>>,
+}
+
+impl<T: State> std::fmt::Debug for Sender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.inner.state.load(std::sync::atomic::Ordering::Acquire);
+        let is_pending = state == T::pending_value();
+        f.debug_struct("Sender")
+            .field("state", &state)
+            .field("is_pending", &is_pending)
+            .finish()
+    }
 }
 
 impl<T: State> Sender<T> {
@@ -322,6 +344,17 @@ impl<T: State> Sender<T> {
 /// ```
 pub struct Receiver<T: State> {
     inner: Arc<Inner<T>>,
+}
+
+impl<T: State> std::fmt::Debug for Receiver<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.inner.state.load(std::sync::atomic::Ordering::Acquire);
+        let is_pending = state == T::pending_value();
+        f.debug_struct("Receiver")
+            .field("state", &state)
+            .field("is_pending", &is_pending)
+            .finish()
+    }
 }
 
 // Receiver is Unpin because all its fields are Unpin

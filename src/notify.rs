@@ -27,6 +27,21 @@ pub struct SingleWaiterNotify {
     waker: AtomicWaker,
 }
 
+impl std::fmt::Debug for SingleWaiterNotify {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.load(Ordering::Acquire);
+        let state_str = match state {
+            EMPTY => "Empty",
+            WAITING => "Waiting",
+            NOTIFIED => "Notified",
+            _ => "Unknown",
+        };
+        f.debug_struct("SingleWaiterNotify")
+            .field("state", &state_str)
+            .finish()
+    }
+}
+
 impl Default for SingleWaiterNotify {
     fn default() -> Self {
         Self::new()
@@ -150,6 +165,22 @@ impl SingleWaiterNotify {
 pub struct Notified<'a> {
     notify: &'a SingleWaiterNotify,
     registered: bool,
+}
+
+impl<'a> std::fmt::Debug for Notified<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.notify.state.load(Ordering::Acquire);
+        let state_str = match state {
+            EMPTY => "Empty",
+            WAITING => "Waiting",
+            NOTIFIED => "Notified",
+            _ => "Unknown",
+        };
+        f.debug_struct("Notified")
+            .field("state", &state_str)
+            .field("registered", &self.registered)
+            .finish()
+    }
 }
 
 impl Future for Notified<'_> {

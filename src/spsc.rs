@@ -156,6 +156,14 @@ struct Inner<T, const N: usize = 32> {
 // 5. Producer 和 Consumer 内部使用原子操作进行跨线程通信
 unsafe impl<T: Send, const N: usize> Sync for Inner<T, N> {}
 
+impl<T, const N: usize> std::fmt::Debug for Inner<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("closed", &self.closed.load(Ordering::Acquire))
+            .finish()
+    }
+}
+
 /// SPSC channel sender
 /// 
 /// SPSC 通道发送器
@@ -163,11 +171,31 @@ pub struct Sender<T, const N: usize> {
     inner: Arc<Inner<T, N>>,
 }
 
+impl<T, const N: usize> std::fmt::Debug for Sender<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sender")
+            .field("closed", &self.is_closed())
+            .field("len", &self.len())
+            .field("capacity", &self.capacity())
+            .finish()
+    }
+}
+
 /// SPSC channel receiver
 /// 
 /// SPSC 通道接收器
 pub struct Receiver<T, const N: usize> {
     inner: Arc<Inner<T, N>>,
+}
+
+impl<T, const N: usize> std::fmt::Debug for Receiver<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Receiver")
+            .field("is_empty", &self.is_empty())
+            .field("len", &self.len())
+            .field("capacity", &self.capacity())
+            .finish()
+    }
 }
 
 /// Draining iterator for the SPSC channel
@@ -187,6 +215,15 @@ pub struct Receiver<T, const N: usize> {
 /// - `N`: 内联缓冲区大小
 pub struct Drain<'a, T, const N: usize> {
     receiver: &'a mut Receiver<T, N>,
+}
+
+impl<'a, T, const N: usize> std::fmt::Debug for Drain<'a, T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Drain")
+            .field("len", &self.receiver.len())
+            .field("is_empty", &self.receiver.is_empty())
+            .finish()
+    }
 }
 
 impl<'a, T, const N: usize> Iterator for Drain<'a, T, N> {

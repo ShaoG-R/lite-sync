@@ -152,6 +152,20 @@ impl<T> Drop for Inner<T> {
     }
 }
 
+impl<T> std::fmt::Debug for Inner<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.load(Ordering::Acquire);
+        let state_str = match state {
+            EMPTY => "Empty",
+            READY => "Ready",
+            _ => "Unknown",
+        };
+        f.debug_struct("Inner")
+            .field("state", &state_str)
+            .finish()
+    }
+}
+
 /// Error returned when the receiver is dropped before receiving a value
 /// 
 /// 当接收器在接收值之前被丢弃时返回的错误
@@ -176,6 +190,20 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 /// 一次性值传递的发送器
 pub struct Sender<T> {
     inner: Arc<Inner<T>>,
+}
+
+impl<T> std::fmt::Debug for Sender<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.inner.state.load(Ordering::Acquire);
+        let state_str = match state {
+            EMPTY => "Empty",
+            READY => "Ready",
+            _ => "Unknown",
+        };
+        f.debug_struct("Sender")
+            .field("state", &state_str)
+            .finish()
+    }
 }
 
 impl<T> Sender<T> {
@@ -261,6 +289,20 @@ impl<T> Sender<T> {
 /// ```
 pub struct Receiver<T> {
     inner: Arc<Inner<T>>,
+}
+
+impl<T> std::fmt::Debug for Receiver<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.inner.state.load(Ordering::Acquire);
+        let state_str = match state {
+            EMPTY => "Empty",
+            READY => "Ready",
+            _ => "Unknown",
+        };
+        f.debug_struct("Receiver")
+            .field("state", &state_str)
+            .finish()
+    }
 }
 
 // Receiver is Unpin because all its fields are Unpin

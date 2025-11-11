@@ -152,7 +152,16 @@ impl Drop for AtomicWaker {
 
 impl std::fmt::Debug for AtomicWaker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AtomicWaker").finish()
+        let state = self.state.load(Ordering::Acquire);
+        let state_str = match state {
+            WAITING => "Waiting",
+            REGISTERING => "Registering",
+            WAKING => "Waking",
+            _ => "Unknown",
+        };
+        f.debug_struct("AtomicWaker")
+            .field("state", &state_str)
+            .finish()
     }
 }
 
