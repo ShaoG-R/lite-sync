@@ -41,6 +41,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use super::notify::SingleWaiterNotify;
 
+use smallring::spsc::{Producer, Consumer, new, PushError, PopError};
+
 /// SPSC channel creation function
 /// 
 /// Creates a bounded SPSC channel with the specified capacity.
@@ -89,7 +91,7 @@ use super::notify::SingleWaiterNotify;
 /// # 返回值
 /// 返回 (Sender, Receiver) 元组
 pub fn channel<T, const N: usize>(capacity: NonZeroUsize) -> (Sender<T, N>, Receiver<T, N>) {
-    let (producer, consumer) = smallring::new::<T, N>(capacity);
+    let (producer, consumer) = new::<T, N>(capacity);
     
     let inner = Arc::new(Inner::<T, N> {
         producer: UnsafeCell::new(producer),
@@ -123,12 +125,12 @@ struct Inner<T, const N: usize = 32> {
     /// Producer (wrapped in UnsafeCell for zero-cost interior mutability)
     /// 
     /// 生产者（用 UnsafeCell 包装以实现零成本内部可变性）
-    producer: UnsafeCell<smallring::Producer<T, N>>,
+    producer: UnsafeCell<Producer<T, N>>,
     
     /// Consumer (wrapped in UnsafeCell for zero-cost interior mutability)
     /// 
     /// 消费者（用 UnsafeCell 包装以实现零成本内部可变性）
-    consumer: UnsafeCell<smallring::Consumer<T, N>>,
+    consumer: UnsafeCell<Consumer<T, N>>,
     
     /// Channel closed flag
     /// 
@@ -311,7 +313,7 @@ impl<T, const N: usize> Sender<T, N> {
                 self.inner.recv_notify.notify_one();
                 Ok(())
             }
-            Err(smallring::PushError::Full(v)) => {
+            Err(PushError::Full(v)) => {
                 Err(TrySendError::Full(v))
             }
         }
@@ -532,7 +534,7 @@ impl<T, const N: usize> Receiver<T, N> {
                 self.inner.send_notify.notify_one();
                 Ok(value)
             }
-            Err(smallring::PopError::Empty) => {
+            Err(PopError::Empty) => {
                 // Check if channel is closed
                 // 检查通道是否已关闭
                 if self.inner.closed.load(Ordering::Acquire) {
@@ -544,7 +546,7 @@ impl<T, const N: usize> Receiver<T, N> {
                             self.inner.send_notify.notify_one();
                             Ok(value)
                         }
-                        Err(smallring::PopError::Empty) => {
+                        Err(PopError::Empty) => {
                             Err(TryRecvError::Closed)
                         }
                     }
