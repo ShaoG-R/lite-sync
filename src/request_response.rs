@@ -10,6 +10,7 @@
 
 mod common;
 pub mod one_to_one;
+#[cfg(feature = "crossbeam-queue")]
 pub mod many_to_one;
 
 // Re-export core types
