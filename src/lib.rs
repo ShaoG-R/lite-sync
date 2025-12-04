@@ -117,8 +117,8 @@
 //!     }
 //!     
 //!     fn pending_value() -> u8 { 0 }
-//!     
 //!     fn closed_value() -> u8 { 255 }
+//!     fn receiver_closed_value() -> u8 { 254 }
 //! }
 //! 
 //! # tokio_test::block_on(async {

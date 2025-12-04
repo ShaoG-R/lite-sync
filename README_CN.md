@@ -33,16 +33,28 @@ lite-sync = "0.1"
 
 ### `oneshot`
 
-带有可自定义状态的一次性完成通知。
+用于在任务之间发送单个值的一次性通道，**API 行为与 tokio::sync::oneshot 对齐**。
 
-非常适合以最小开销发出任务完成信号。通过 `State` trait 支持自定义状态类型，允许您不仅传达"完成"，还能传达"如何完成"（成功、失败、超时等）。
+提供两种变体：
+- **`oneshot::generic`** - 适用于任意类型 `T: Send`，使用 `UnsafeCell<MaybeUninit<T>>` 存储
+- **`oneshot::lite`** - 超轻量变体，适用于 `State` 可编码类型，仅使用 `AtomicU8` 存储
+
+**API（与 tokio oneshot 对齐）**：
+- `channel<T>()` - 创建发送器/接收器对
+- `Sender::send(value) -> Result<(), T>` - 发送值，如果接收器已关闭则返回 `Err(value)`
+- `Sender::is_closed()` - 检查接收器是否已被丢弃或关闭
+- `Receiver::recv().await` / `receiver.await` - 异步接收，返回 `Result<T, RecvError>`
+- `Receiver::try_recv()` - 非阻塞接收，返回 `Result<T, TryRecvError>`
+- `Receiver::close()` - 关闭接收器，阻止后续发送
+- `Receiver::blocking_recv()` - 阻塞接收，用于同步代码
+
+> **注意**：与 tokio 的 oneshot 使用 CAS 保证接收器已关闭时返回 `Err` 不同，我们的实现为了简单使用 `Arc` 引用计数检查。如果 `send` 和 `Receiver` 的 drop 同时发生，`send` 可能返回 `Ok(())` 即使值不会被接收。如需保证检测到取消，请使用 `Receiver::close()` 显式取消。
 
 **关键特性**：
-- 返回 `Result<T, RecvError>`，当发送器被丢弃时返回错误
-- 提供 `recv()` 异步方法和 `try_recv()` 非阻塞方法
 - Waker 存储零 Box 分配
 - 直接实现 `Future` 以支持便捷的 `.await`
 - 立即完成的快速路径
+- 支持同步（`blocking_recv`）和异步使用
 
 ### `spsc`
 
@@ -70,7 +82,53 @@ lite-sync = "0.1"
 
 ## 示例
 
-### 带有自定义状态的一次性完成通知
+### 通用 oneshot 通道（类似 tokio::sync::oneshot）
+
+```rust
+use lite_sync::oneshot::generic::{channel, Sender, Receiver, RecvError, TryRecvError};
+
+#[tokio::main]
+async fn main() {
+    // 为任意 Send 类型创建通道
+    let (tx, rx) = channel::<String>();
+    
+    tokio::spawn(async move {
+        // send() 在接收器关闭时返回 Err(value)
+        if tx.send("Hello".to_string()).is_err() {
+            println!("接收器已丢弃");
+        }
+    });
+    
+    // 直接 .await 或使用 recv()
+    match rx.await {
+        Ok(msg) => println!("收到: {}", msg),
+        Err(RecvError) => println!("发送器已丢弃"),
+    }
+}
+```
+
+### 接收器关闭和 try_recv
+
+```rust
+use lite_sync::oneshot::generic::channel;
+
+#[tokio::main]
+async fn main() {
+    let (tx, mut rx) = channel::<i32>();
+    
+    // 检查接收器是否已关闭
+    assert!(!tx.is_closed());
+    
+    // 关闭接收器 - 阻止后续发送
+    rx.close();
+    assert!(tx.is_closed());
+    
+    // close 后 send() 失败
+    assert!(tx.send(42).is_err());
+}
+```
+
+### Lite oneshot 自定义状态（超轻量）
 
 ```rust
 use lite_sync::oneshot::lite::{State, Sender};
@@ -99,6 +157,7 @@ impl State for TaskResult {
     
     fn pending_value() -> u8 { 0 }
     fn closed_value() -> u8 { 255 }
+    fn receiver_closed_value() -> u8 { 254 }
 }
 
 #[tokio::main]
@@ -106,12 +165,10 @@ async fn main() {
     let (sender, receiver) = Sender::<TaskResult>::new();
     
     tokio::spawn(async move {
-        // 执行一些工作...
-        sender.send(TaskResult::Success);
+        sender.send(TaskResult::Success).unwrap();
     });
     
-    // 使用 recv() 异步接收，或直接 .await
-    match receiver.recv().await {
+    match receiver.await {
         Ok(TaskResult::Success) => println!("任务成功"),
         Ok(TaskResult::Error) => println!("任务失败"),
         Err(_) => println!("发送器已丢弃"),
@@ -174,13 +231,31 @@ async fn main() {
     let (sender, receiver) = Sender::<()>::new();
     
     tokio::spawn(async move {
-        // 任务完成
-        sender.send(());
+        sender.send(()).unwrap();
     });
     
-    // 使用 recv() 或直接 .await，返回 Result
-    match receiver.recv().await {
+    match receiver.await {
         Ok(()) => println!("任务完成"),
+        Err(_) => println!("发送器已丢弃"),
+    }
+}
+```
+
+### 阻塞接收（用于同步代码）
+
+```rust
+use lite_sync::oneshot::generic::channel;
+
+fn main() {
+    let (tx, rx) = channel::<String>();
+    
+    std::thread::spawn(move || {
+        tx.send("来自线程的问候".to_string()).unwrap();
+    });
+    
+    // blocking_recv() 用于同步代码
+    match rx.blocking_recv() {
+        Ok(msg) => println!("收到: {}", msg),
         Err(_) => println!("发送器已丢弃"),
     }
 }

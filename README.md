@@ -33,16 +33,28 @@ lite-sync = "0.1"
 
 ### `oneshot`
 
-One-shot completion notification with customizable state.
+One-shot channel for sending a single value between tasks, with **API behavior aligned with tokio::sync::oneshot**.
 
-Perfect for signaling task completion with minimal overhead. Supports custom state types through the `State` trait, allowing you to communicate not just "done" but also "how it finished" (success, failure, timeout, etc.).
+Provides two variants:
+- **`oneshot::generic`** - For arbitrary types `T: Send`, uses `UnsafeCell<MaybeUninit<T>>` for storage
+- **`oneshot::lite`** - Ultra-lightweight variant for `State`-encodable types, uses only `AtomicU8` for storage
+
+**API (aligned with tokio oneshot)**:
+- `channel<T>()` - Create a sender/receiver pair
+- `Sender::send(value) -> Result<(), T>` - Send value, returns `Err(value)` if receiver is closed
+- `Sender::is_closed()` - Check if receiver has been dropped or closed
+- `Receiver::recv().await` / `receiver.await` - Async receive, returns `Result<T, RecvError>`
+- `Receiver::try_recv()` - Non-blocking receive, returns `Result<T, TryRecvError>`
+- `Receiver::close()` - Close the receiver, preventing future sends
+- `Receiver::blocking_recv()` - Blocking receive for synchronous code
+
+> **Note**: Unlike tokio's oneshot which uses CAS to guarantee `Err` when receiver is already closed, our implementation uses `Arc` refcount check for simplicity. If `send` and `Receiver` drop occur concurrently, `send` may return `Ok(())` even if the value will not be received. Use `Receiver::close()` for explicit cancellation when guaranteed detection is needed.
 
 **Key features**:
-- Returns `Result<T, RecvError>` - detects when sender is dropped
-- Provides `recv()` async method and `try_recv()` non-blocking method
 - Zero Box allocation for waker storage
 - Direct `Future` implementation for ergonomic `.await`
 - Fast path for immediate completion
+- Supports both sync (`blocking_recv`) and async usage
 
 ### `spsc`
 
@@ -70,7 +82,53 @@ Based on Tokio's `AtomicWaker` but simplified for specific use cases. Provides s
 
 ## Examples
 
-### One-shot completion with custom state
+### Generic oneshot channel (like tokio::sync::oneshot)
+
+```rust
+use lite_sync::oneshot::generic::{channel, Sender, Receiver, RecvError, TryRecvError};
+
+#[tokio::main]
+async fn main() {
+    // Create a channel for any Send type
+    let (tx, rx) = channel::<String>();
+    
+    tokio::spawn(async move {
+        // send() returns Err(value) if receiver is closed
+        if tx.send("Hello".to_string()).is_err() {
+            println!("Receiver dropped");
+        }
+    });
+    
+    // Direct .await or use recv()
+    match rx.await {
+        Ok(msg) => println!("Received: {}", msg),
+        Err(RecvError) => println!("Sender dropped"),
+    }
+}
+```
+
+### Receiver close and try_recv
+
+```rust
+use lite_sync::oneshot::generic::channel;
+
+#[tokio::main]
+async fn main() {
+    let (tx, mut rx) = channel::<i32>();
+    
+    // Check if receiver is closed
+    assert!(!tx.is_closed());
+    
+    // Close the receiver - prevents future sends
+    rx.close();
+    assert!(tx.is_closed());
+    
+    // send() fails after close
+    assert!(tx.send(42).is_err());
+}
+```
+
+### Lite oneshot with custom state (ultra-lightweight)
 
 ```rust
 use lite_sync::oneshot::lite::{State, Sender};
@@ -99,6 +157,7 @@ impl State for TaskResult {
     
     fn pending_value() -> u8 { 0 }
     fn closed_value() -> u8 { 255 }
+    fn receiver_closed_value() -> u8 { 254 }
 }
 
 #[tokio::main]
@@ -106,12 +165,10 @@ async fn main() {
     let (sender, receiver) = Sender::<TaskResult>::new();
     
     tokio::spawn(async move {
-        // Do some work...
-        sender.send(TaskResult::Success);
+        sender.send(TaskResult::Success).unwrap();
     });
     
-    // Use recv() to receive asynchronously, or direct .await
-    match receiver.recv().await {
+    match receiver.await {
         Ok(TaskResult::Success) => println!("Task succeeded"),
         Ok(TaskResult::Error) => println!("Task failed"),
         Err(_) => println!("Sender dropped"),
@@ -174,13 +231,31 @@ async fn main() {
     let (sender, receiver) = Sender::<()>::new();
     
     tokio::spawn(async move {
-        // Task completes
-        sender.send(());
+        sender.send(()).unwrap();
     });
     
-    // Use recv() or direct .await, returns Result
-    match receiver.recv().await {
+    match receiver.await {
         Ok(()) => println!("Task completed"),
+        Err(_) => println!("Sender dropped"),
+    }
+}
+```
+
+### Blocking receive (for sync code)
+
+```rust
+use lite_sync::oneshot::generic::channel;
+
+fn main() {
+    let (tx, rx) = channel::<String>();
+    
+    std::thread::spawn(move || {
+        tx.send("Hello from thread".to_string()).unwrap();
+    });
+    
+    // blocking_recv() for synchronous code
+    match rx.blocking_recv() {
+        Ok(msg) => println!("Received: {}", msg),
         Err(_) => println!("Sender dropped"),
     }
 }
