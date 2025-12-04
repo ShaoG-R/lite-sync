@@ -53,61 +53,52 @@ impl<T> Inner<T> {
     /// Send a value (store value and wake)
     /// 
     /// 发送一个值（存储值并唤醒）
+    /// 
+    /// # Safety guarantee
+    /// Sender is non-Clone and `send(self, ...)` consumes self,
+    /// so the compiler guarantees this is called at most once.
+    /// No CAS needed - simple store is sufficient.
+    /// 
+    /// # 安全保证
+    /// Sender 不可 Clone 且 `send(self, ...)` 消耗 self，
+    /// 编译器保证此方法最多调用一次。
+    /// 无需 CAS - 简单 store 即可。
     #[inline]
-    pub(crate) fn send(&self, value: T) -> Result<(), T> {
-        // Try to transition from EMPTY to READY
-        match self.state.compare_exchange(
-            EMPTY,
-            READY,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
-                // Successfully transitioned, store the value
-                // SAFETY: We have exclusive access via the state transition
-                // No other thread can access the value until state is READY
-                // We're initializing previously uninitialized memory
-                unsafe {
-                    (*self.value.get()).write(value);
-                }
-                
-                // Wake the registered waker if any
-                self.waker.wake();
-                Ok(())
-            }
-            Err(_) => {
-                // State was not EMPTY, value already sent
-                Err(value)
-            }
+    pub(crate) fn send(&self, value: T) {
+        // SAFETY: Sender is non-Clone and send() consumes self,
+        // so this method can only be called once. State is guaranteed to be EMPTY.
+        // 
+        // Store value first, then set state to READY.
+        // Release ordering ensures the value write is visible before state change.
+        unsafe {
+            (*self.value.get()).write(value);
         }
+        self.state.store(READY, Ordering::Release);
+        
+        // Wake the registered waker if any
+        self.waker.wake();
     }
     
     /// Try to receive the value without blocking
     /// 
     /// 尝试接收值而不阻塞
+    /// 
+    /// # Note
+    /// Receiver is non-Clone, so only one thread can call this.
+    /// Using swap instead of CAS for simplicity.
+    /// 
+    /// # 说明
+    /// Receiver 不可 Clone，只有一个线程可以调用此方法。
+    /// 使用 swap 替代 CAS 更简洁。
     #[inline]
     fn try_recv(&self) -> Option<T> {
-        // Check if value is ready
-        if self.state.load(Ordering::Acquire) == READY {
-            // Try to transition from READY back to EMPTY to claim the value
-            match self.state.compare_exchange(
-                READY,
-                EMPTY,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    // Successfully claimed the value
-                    // SAFETY: We have exclusive access via the state transition
-                    // State was READY, so value must be initialized
-                    unsafe {
-                        Some((*self.value.get()).assume_init_read())
-                    }
-                }
-                Err(_) => {
-                    // Someone else already claimed it
-                    None
-                }
+        // Swap state to EMPTY and check if it was READY
+        // Acquire ordering ensures we see the value written by sender
+        if self.state.swap(EMPTY, Ordering::Acquire) == READY {
+            // SAFETY: State was READY, so value must be initialized.
+            // Receiver is non-Clone, so we have exclusive access.
+            unsafe {
+                Some((*self.value.get()).assume_init_read())
             }
         } else {
             None
@@ -239,14 +230,39 @@ impl<T> Sender<T> {
     
     /// Send a value through the channel
     /// 
-    /// Returns `Err(value)` if the receiver was already dropped
+    /// Returns `Err(value)` if the receiver was already dropped.
+    /// This method consumes self, guaranteeing single-use.
     /// 
     /// 通过通道发送一个值
     /// 
-    /// 如果接收器已被丢弃则返回 `Err(value)`
+    /// 如果接收器已被丢弃则返回 `Err(value)`。
+    /// 此方法消耗 self，保证单次使用。
     #[inline]
     pub fn send(self, value: T) -> Result<(), T> {
-        self.inner.send(value)
+        // Check if receiver is still alive via Arc reference count
+        // If count == 1, only Sender holds a reference, meaning Receiver was dropped
+        if Arc::strong_count(&self.inner) == 1 {
+            return Err(value);
+        }
+        self.send_unchecked(value);
+        Ok(())
+    }
+    
+    /// Send a value without checking if receiver is dropped
+    /// 
+    /// This is faster than `send()` as it skips the Arc reference count check.
+    /// Use this when you know the receiver is still alive, or don't care if
+    /// the value is dropped.
+    /// 
+    /// 发送值而不检查接收器是否已被丢弃
+    /// 
+    /// 这比 `send()` 更快，因为它跳过了 Arc 引用计数检查。
+    /// 当你知道接收器仍然存活，或者不关心值是否被丢弃时使用。
+    #[inline]
+    pub fn send_unchecked(self, value: T) {
+        self.inner.send(value);
+        // Prevent drop from waking receiver again
+        std::mem::forget(self);
     }
 }
 

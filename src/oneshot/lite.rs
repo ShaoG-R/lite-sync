@@ -274,34 +274,53 @@ impl<T: State> Sender<T> {
     
     /// Send a completion notification with the given state
     /// 
+    /// Returns `Err(state)` if the receiver was already dropped.
+    /// This method consumes self, guaranteeing single-use.
+    /// 
     /// 使用给定状态发送完成通知
+    /// 
+    /// 如果接收器已被丢弃则返回 `Err(state)`。
+    /// 此方法消耗 self，保证单次使用。
     #[inline]
-    pub fn send(&self, state: T) {
+    pub fn send(self, state: T) -> Result<(), T> {
+        // Check if receiver is still alive via Arc reference count
+        // If count == 1, only Sender holds a reference, meaning Receiver was dropped
+        if Arc::strong_count(&self.inner) == 1 {
+            return Err(state);
+        }
+        self.send_unchecked(state);
+        Ok(())
+    }
+    
+    /// Send a value without checking if receiver is dropped
+    /// 
+    /// This is faster than `send()` as it skips the Arc reference count check.
+    /// Use this when you know the receiver is still alive, or don't care if
+    /// the value is dropped.
+    /// 
+    /// 发送值而不检查接收器是否已被丢弃
+    /// 
+    /// 这比 `send()` 更快，因为它跳过了 Arc 引用计数检查。
+    /// 当你知道接收器仍然存活，或者不关心值是否被丢弃时使用。
+    #[inline]
+    pub fn send_unchecked(self, state: T) {
         self.inner.send(state);
+        // Prevent drop from setting CLOSED state
+        std::mem::forget(self);
     }
 }
 
 impl<T: State> Drop for Sender<T> {
     fn drop(&mut self) {
-        // Mark the channel as closed when sender is dropped, but only if no value was sent
-        // This allows receivers to detect that the sender is gone
-        // and return an error instead of waiting forever
+        // Mark the channel as closed when sender is dropped
+        // Since send() consumes self, if drop is called, send was never called.
+        // No CAS needed - simple store is sufficient.
         //
-        // 当发送器被丢弃时标记通道为已关闭，但仅在没有发送值时
-        // 这允许接收器检测到发送器已消失
-        // 并返回错误而不是永远等待
-        
-        // Try to transition from PENDING to CLOSED
-        // If this fails, it means a value was already sent, so we don't need to do anything
-        if self.inner.state.compare_exchange(
-            T::pending_value(),
-            T::closed_value(),
-            Ordering::Release,
-            Ordering::Acquire,
-        ).is_ok() {
-            // Successfully marked as closed, wake any waiting receiver
-            self.inner.waker.wake();
-        }
+        // 当发送器被丢弃时标记通道为已关闭
+        // 由于 send() 消耗 self，如果 drop 被调用，说明 send 从未被调用。
+        // 无需 CAS - 简单 store 即可。
+        self.inner.state.store(T::closed_value(), Ordering::Release);
+        self.inner.waker.wake();
     }
 }
 
@@ -599,7 +618,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(TestCompletion::Called);
+            notifier.send(TestCompletion::Called).unwrap();
         });
         
         let result = receiver.recv().await;
@@ -612,7 +631,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(TestCompletion::Cancelled);
+            notifier.send(TestCompletion::Cancelled).unwrap();
         });
         
         let result = receiver.recv().await;
@@ -624,7 +643,7 @@ mod tests {
         let (notifier, receiver) = Sender::<TestCompletion>::new();
         
         // Notify before waiting (fast path)
-        notifier.send(TestCompletion::Called);
+        notifier.send(TestCompletion::Called).unwrap();
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(TestCompletion::Called));
@@ -635,7 +654,7 @@ mod tests {
         let (notifier, receiver) = Sender::<TestCompletion>::new();
         
         // Notify before waiting (fast path)
-        notifier.send(TestCompletion::Cancelled);
+        notifier.send(TestCompletion::Cancelled).unwrap();
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(TestCompletion::Cancelled));
@@ -682,7 +701,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(CustomState::Success);
+            notifier.send(CustomState::Success).unwrap();
         });
         
         let result = receiver.recv().await;
@@ -694,7 +713,7 @@ mod tests {
         let (notifier, receiver) = Sender::<CustomState>::new();
         
         // Immediate notification
-        notifier.send(CustomState::Timeout);
+        notifier.send(CustomState::Timeout).unwrap();
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(CustomState::Timeout));
@@ -706,7 +725,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(());
+            notifier.send(()).unwrap();
         });
         
         let result = receiver.recv().await;
@@ -718,7 +737,7 @@ mod tests {
         let (notifier, receiver) = Sender::<()>::new();
         
         // Immediate notification (fast path)
-        notifier.send(());
+        notifier.send(()).unwrap();
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(()));
@@ -731,7 +750,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(TestCompletion::Called);
+            notifier.send(TestCompletion::Called).unwrap();
         });
         
         // Direct await without .wait()
@@ -744,7 +763,7 @@ mod tests {
         let (notifier, receiver) = Sender::<TestCompletion>::new();
         
         // Notify before awaiting (fast path)
-        notifier.send(TestCompletion::Cancelled);
+        notifier.send(TestCompletion::Cancelled).unwrap();
         
         // Direct await
         let result = receiver.await;
@@ -757,7 +776,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(());
+            notifier.send(()).unwrap();
         });
         
         // Direct await with unit type
@@ -771,7 +790,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(CustomState::Failure);
+            notifier.send(CustomState::Failure).unwrap();
         });
         
         // Direct await with custom state
@@ -786,7 +805,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.send(TestCompletion::Called);
+            notifier.send(TestCompletion::Called).unwrap();
         });
         
         // Await on mutable reference
@@ -799,7 +818,7 @@ mod tests {
         let (notifier, mut receiver) = Sender::<()>::new();
         
         // Immediate notification
-        notifier.send(());
+        notifier.send(()).unwrap();
         
         // Await on mutable reference (fast path)
         let result = (&mut receiver).await;
@@ -821,7 +840,7 @@ mod tests {
         let (notifier, mut receiver) = Sender::<TestCompletion>::new();
         
         // Send value
-        notifier.send(TestCompletion::Called);
+        notifier.send(TestCompletion::Called).unwrap();
         
         // Try receive after sending
         let result = receiver.try_recv();
