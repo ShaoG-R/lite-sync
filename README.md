@@ -38,7 +38,7 @@ One-shot completion notification with customizable state.
 Perfect for signaling task completion with minimal overhead. Supports custom state types through the `State` trait, allowing you to communicate not just "done" but also "how it finished" (success, failure, timeout, etc.).
 
 **Key features**:
-- Returns `Result<T, SendError>` - detects when sender is dropped
+- Returns `Result<T, RecvError>` - detects when sender is dropped
 - Provides `recv()` async method and `try_recv()` non-blocking method
 - Zero Box allocation for waker storage
 - Direct `Future` implementation for ergonomic `.await`

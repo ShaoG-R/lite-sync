@@ -6,19 +6,27 @@ use std::task::{Context, Poll};
 
 use crate::atomic_waker::AtomicWaker;
 
-/// Error returned when the sender is dropped before sending a value
-/// 
-/// 当发送器在发送值之前被丢弃时返回的错误
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SendError;
+pub mod error {
+    //! Oneshot error types.
 
-impl std::fmt::Display for SendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "sender dropped")
+    use std::fmt;
+
+    /// Error returned when the sender is dropped before sending a value
+    /// 
+    /// 当发送器在发送值之前被丢弃时返回的错误
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct RecvError;
+
+    impl fmt::Display for RecvError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "sender dropped")
+        }
     }
+
+    impl std::error::Error for RecvError {}
 }
 
-impl std::error::Error for SendError {}
+use self::error::RecvError;
 
 /// Trait for types that can be used as oneshot state
 /// 
@@ -428,13 +436,13 @@ impl<T: State> Receiver<T> {
     /// 
     /// This is equivalent to using `.await` directly on the receiver
     /// 
-    /// Returns `Err(SendError)` if the sender was dropped before sending a value
+    /// Returns `Err(RecvError)` if the sender was dropped before sending a value
     /// 
     /// 异步接收一个值
     /// 
     /// 这等同于直接在 receiver 上使用 `.await`
     /// 
-    /// 如果发送器在发送值之前被丢弃则返回 `Err(SendError)`
+    /// 如果发送器在发送值之前被丢弃则返回 `Err(RecvError)`
     /// 
     /// # Returns
     /// Returns the completion state or error if sender was dropped
@@ -442,32 +450,32 @@ impl<T: State> Receiver<T> {
     /// # 返回值
     /// 返回完成状态或发送器被丢弃时的错误
     #[inline]
-    pub async fn recv(self) -> Result<T, SendError> {
+    pub async fn recv(self) -> Result<T, RecvError> {
         self.await
     }
     
     /// Try to receive a value without blocking
     /// 
     /// Returns `None` if no value has been sent yet
-    /// Returns `Err(SendError)` if the sender was dropped
+    /// Returns `Err(RecvError)` if the sender was dropped
     /// 
     /// 尝试接收值而不阻塞
     /// 
     /// 如果还没有发送值则返回 `None`
-    /// 如果发送器被丢弃则返回 `Err(SendError)`
+    /// 如果发送器被丢弃则返回 `Err(RecvError)`
     /// 
     /// # Returns
-    /// Returns `Some(value)` if value is ready, `None` if pending, or `Err(SendError)` if sender dropped
+    /// Returns `Some(value)` if value is ready, `None` if pending, or `Err(RecvError)` if sender dropped
     /// 
     /// # 返回值
-    /// 如果值已就绪返回 `Some(value)`，如果待处理返回 `None`，如果发送器被丢弃返回 `Err(SendError)`
+    /// 如果值已就绪返回 `Some(value)`，如果待处理返回 `None`，如果发送器被丢弃返回 `Err(RecvError)`
     #[inline]
-    pub fn try_recv(&mut self) -> Result<Option<T>, SendError> {
+    pub fn try_recv(&mut self) -> Result<Option<T>, RecvError> {
         let current = self.inner.state.load(Ordering::Acquire);
         
         // Check if sender was dropped
         if current == T::closed_value() {
-            return Err(SendError);
+            return Err(RecvError);
         }
         
         // Check if value is ready
@@ -500,7 +508,7 @@ impl<T: State> Receiver<T> {
 /// - 无需中间 future 状态
 /// - 检测发送器何时被丢弃并返回错误
 impl<T: State> Future for Receiver<T> {
-    type Output = Result<T, SendError>;
+    type Output = Result<T, RecvError>;
     
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: Receiver is Unpin, so we can safely get a mutable reference
@@ -511,7 +519,7 @@ impl<T: State> Future for Receiver<T> {
         
         // Check if sender was dropped
         if current == T::closed_value() {
-            return Poll::Ready(Err(SendError));
+            return Poll::Ready(Err(RecvError));
         }
         
         if let Some(state) = T::from_u8(current)
@@ -528,7 +536,7 @@ impl<T: State> Future for Receiver<T> {
         
         // Check if sender was dropped
         if current == T::closed_value() {
-            return Poll::Ready(Err(SendError));
+            return Poll::Ready(Err(RecvError));
         }
         
         if let Some(state) = T::from_u8(current)
@@ -829,7 +837,7 @@ mod tests {
         
         // Try receive should return error
         let result = receiver.try_recv();
-        assert_eq!(result, Err(SendError));
+        assert_eq!(result, Err(RecvError));
     }
     
     // Tests for sender dropped behavior
@@ -842,7 +850,7 @@ mod tests {
         
         // Recv should return error
         let result = receiver.recv().await;
-        assert_eq!(result, Err(SendError));
+        assert_eq!(result, Err(RecvError));
     }
     
     #[tokio::test]
@@ -854,7 +862,7 @@ mod tests {
         
         // Recv should return error
         let result = receiver.recv().await;
-        assert_eq!(result, Err(SendError));
+        assert_eq!(result, Err(RecvError));
     }
     
     #[tokio::test]
@@ -866,7 +874,7 @@ mod tests {
         
         // Recv should return error
         let result = receiver.recv().await;
-        assert_eq!(result, Err(SendError));
+        assert_eq!(result, Err(RecvError));
     }
 }
 

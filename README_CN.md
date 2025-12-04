@@ -38,7 +38,7 @@ lite-sync = "0.1"
 非常适合以最小开销发出任务完成信号。通过 `State` trait 支持自定义状态类型，允许您不仅传达"完成"，还能传达"如何完成"（成功、失败、超时等）。
 
 **关键特性**：
-- 返回 `Result<T, SendError>`，当发送器被丢弃时返回错误
+- 返回 `Result<T, RecvError>`，当发送器被丢弃时返回错误
 - 提供 `recv()` 异步方法和 `try_recv()` 非阻塞方法
 - Waker 存储零 Box 分配
 - 直接实现 `Future` 以支持便捷的 `.await`

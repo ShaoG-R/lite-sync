@@ -26,7 +26,7 @@
 /// ### Example:
 /// 
 /// ```
-/// use lite_sync::oneshot::lite::Sender;
+/// use lite_sync::oneshot::lite::{Sender, error::RecvError};
 /// 
 /// # tokio_test::block_on(async {
 /// let (sender, receiver) = Sender::<()>::new();
