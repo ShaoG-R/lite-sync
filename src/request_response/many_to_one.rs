@@ -20,7 +20,7 @@ use super::common::ChannelError;
 /// Internal request wrapper containing request data and response channel
 /// 
 /// 内部请求包装器，包含请求数据和响应通道
-struct RequestWrapper<Req, Resp> {
+struct RequestWrapper<Req, Resp: Send> {
     /// The actual request data
     /// 
     /// 实际的请求数据
@@ -35,7 +35,7 @@ struct RequestWrapper<Req, Resp> {
 /// Shared internal state for many-to-one channel
 /// 
 /// 多对一通道的共享内部状态
-struct Inner<Req, Resp> {
+struct Inner<Req, Resp: Send> {
     /// Lock-free queue for pending requests
     /// 
     /// 待处理请求的无锁队列
@@ -57,7 +57,7 @@ struct Inner<Req, Resp> {
     b_waker: crate::atomic_waker::AtomicWaker,
 }
 
-impl<Req, Resp> std::fmt::Debug for Inner<Req, Resp> {
+impl<Req, Resp: Send> std::fmt::Debug for Inner<Req, Resp> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sender_count = self.sender_count.load(Ordering::Acquire);
         f.debug_struct("Inner")
@@ -67,7 +67,7 @@ impl<Req, Resp> std::fmt::Debug for Inner<Req, Resp> {
     }
 }
 
-impl<Req, Resp> Inner<Req, Resp> {
+impl<Req, Resp: Send> Inner<Req, Resp> {
     /// Create new shared state
     /// 
     /// 创建新的共享状态
@@ -93,11 +93,11 @@ impl<Req, Resp> Inner<Req, Resp> {
 /// Side A endpoint (request sender, response receiver) - can be cloned
 /// 
 /// A 方的 channel 端点（请求发送方，响应接收方）- 可以克隆
-pub struct SideA<Req, Resp> {
+pub struct SideA<Req, Resp: Send> {
     inner: Arc<Inner<Req, Resp>>,
 }
 
-impl<Req, Resp> std::fmt::Debug for SideA<Req, Resp> {
+impl<Req, Resp: Send> std::fmt::Debug for SideA<Req, Resp> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SideA")
             .field("inner", &self.inner)
@@ -105,7 +105,7 @@ impl<Req, Resp> std::fmt::Debug for SideA<Req, Resp> {
     }
 }
 
-impl<Req, Resp> Clone for SideA<Req, Resp> {
+impl<Req, Resp: Send> Clone for SideA<Req, Resp> {
     fn clone(&self) -> Self {
         // Increment sender count with Relaxed (reads will use Acquire)
         self.inner.sender_count.fetch_add(1, Ordering::Relaxed);
@@ -116,7 +116,7 @@ impl<Req, Resp> Clone for SideA<Req, Resp> {
 }
 
 // Drop implementation for SideA to decrement sender count
-impl<Req, Resp> Drop for SideA<Req, Resp> {
+impl<Req, Resp: Send> Drop for SideA<Req, Resp> {
     fn drop(&mut self) {
         // Decrement sender count with Release ordering to ensure visibility
         if self.inner.sender_count.fetch_sub(1, Ordering::Release) == 1 {
@@ -129,11 +129,11 @@ impl<Req, Resp> Drop for SideA<Req, Resp> {
 /// Side B endpoint (request receiver, response sender) - single instance
 /// 
 /// B 方的 channel 端点（请求接收方，响应发送方）- 单实例
-pub struct SideB<Req, Resp> {
+pub struct SideB<Req, Resp: Send> {
     inner: Arc<Inner<Req, Resp>>,
 }
 
-impl<Req, Resp> std::fmt::Debug for SideB<Req, Resp> {
+impl<Req, Resp: Send> std::fmt::Debug for SideB<Req, Resp> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SideB")
             .field("inner", &self.inner)
@@ -177,7 +177,7 @@ impl<Req, Resp> std::fmt::Debug for SideB<Req, Resp> {
 /// # });
 /// ```
 #[inline]
-pub fn channel<Req, Resp>() -> (SideA<Req, Resp>, SideB<Req, Resp>) {
+pub fn channel<Req, Resp: Send>() -> (SideA<Req, Resp>, SideB<Req, Resp>) {
     let inner = Arc::new(Inner::new());
     
     let side_a = SideA {
@@ -191,7 +191,7 @@ pub fn channel<Req, Resp>() -> (SideA<Req, Resp>, SideB<Req, Resp>) {
     (side_a, side_b)
 }
 
-impl<Req, Resp> SideA<Req, Resp> {
+impl<Req, Resp: Send> SideA<Req, Resp> {
     /// Send a request and wait for response
     /// 
     /// This method will:
@@ -371,7 +371,7 @@ where
     }
 }
 
-impl<Req, Resp> SideB<Req, Resp> {
+impl<Req, Resp: Send> SideB<Req, Resp> {
     /// Wait for and receive next request, returning a guard that must be replied to
     /// 
     /// The returned `RequestGuard` enforces that you must call `reply()` on it.
@@ -512,7 +512,7 @@ impl<Req, Resp> SideB<Req, Resp> {
 }
 
 // Drop implementation to clean up
-impl<Req, Resp> Drop for SideB<Req, Resp> {
+impl<Req, Resp: Send> Drop for SideB<Req, Resp> {
     fn drop(&mut self) {
         // Side B closed, notify any waiting senders
         self.inner.b_closed.store(true, Ordering::Release);
@@ -526,13 +526,13 @@ impl<Req, Resp> Drop for SideB<Req, Resp> {
 }
 
 /// Future: Side B receives request
-struct RecvRequest<'a, Req, Resp> {
+struct RecvRequest<'a, Req, Resp: Send> {
     inner: &'a Inner<Req, Resp>,
     registered: bool,
 }
 
 // RecvRequest is Unpin because it only holds references and a bool
-impl<Req, Resp> Unpin for RecvRequest<'_, Req, Resp> {}
+impl<Req, Resp: Send> Unpin for RecvRequest<'_, Req, Resp> {}
 
 impl<Req, Resp> Future for RecvRequest<'_, Req, Resp>
 where

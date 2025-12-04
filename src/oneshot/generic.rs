@@ -1,362 +1,122 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+//! Generic oneshot channel for arbitrary types.
+//!
+//! 用于任意类型的通用一次性通道。
+
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
+use std::sync::atomic::{AtomicU8, Ordering};
 
-use crate::atomic_waker::AtomicWaker;
+use super::common::{self, OneshotStorage, TakeResult};
+
+// Re-export common types
+pub use super::common::error;
+pub use super::common::RecvError;
 
 // States for the value cell
-const EMPTY: u8 = 0;   // No value stored
-const READY: u8 = 1;   // Value is ready
+const EMPTY: u8 = 0;    // No value stored
+const READY: u8 = 1;    // Value is ready
+const CLOSED: u8 = 2;   // Sender dropped without sending
 
-/// Inner state for one-shot value transfer
+// ============================================================================
+// Generic Storage
+// ============================================================================
+
+/// Storage for generic types using `UnsafeCell<MaybeUninit<T>>`
 /// 
-/// Uses UnsafeCell<MaybeUninit<T>> for direct value storage without any overhead:
-/// - Waker itself is just 2 pointers (16 bytes on 64-bit), no additional heap allocation
-/// - Value is stored directly with zero overhead (no Option discriminant)
-/// - Atomic state machine (AtomicU8) tracks initialization state
-/// - UnsafeCell allows interior mutability with proper synchronization
-/// 
-/// 一次性值传递的内部状态
-/// 
-/// 使用 UnsafeCell<MaybeUninit<T>> 实现零开销的直接值存储：
-/// - Waker 本身只是 2 个指针（64 位系统上 16 字节），无额外堆分配
-/// - 值直接存储，零开销（无 Option 判别标记）
-/// - 原子状态机（AtomicU8）跟踪初始化状态
-/// - UnsafeCell 允许通过适当同步实现内部可变性
-pub(crate) struct Inner<T> {
-    waker: AtomicWaker,
+/// 使用 `UnsafeCell<MaybeUninit<T>>` 存储泛型类型
+pub struct GenericStorage<T> {
     state: AtomicU8,
     value: UnsafeCell<MaybeUninit<T>>,
 }
 
-impl<T> Inner<T> {
-    /// Create a new oneshot inner state
-    /// 
-    /// Extremely fast: just initializes empty waker and uninitialized memory
-    /// 
-    /// 创建一个新的 oneshot 内部状态
-    /// 
-    /// 极快：仅初始化空 waker 和未初始化内存
+// SAFETY: GenericStorage<T> is Send + Sync as long as T is Send
+// - UnsafeCell<MaybeUninit<T>> is protected by atomic state transitions
+// - Only one thread can access the value at a time (enforced by state machine)
+unsafe impl<T: Send> Send for GenericStorage<T> {}
+unsafe impl<T: Send> Sync for GenericStorage<T> {}
+
+impl<T: Send> OneshotStorage for GenericStorage<T> {
+    type Value = T;
+    
     #[inline]
-    pub(crate) fn new() -> Arc<Self> {
-        Arc::new(Self {
-            waker: AtomicWaker::new(),
+    fn new() -> Self {
+        Self {
             state: AtomicU8::new(EMPTY),
             value: UnsafeCell::new(MaybeUninit::uninit()),
-        })
+        }
     }
     
-    /// Send a value (store value and wake)
-    /// 
-    /// 发送一个值（存储值并唤醒）
-    /// 
-    /// # Safety guarantee
-    /// Sender is non-Clone and `send(self, ...)` consumes self,
-    /// so the compiler guarantees this is called at most once.
-    /// No CAS needed - simple store is sufficient.
-    /// 
-    /// # 安全保证
-    /// Sender 不可 Clone 且 `send(self, ...)` 消耗 self，
-    /// 编译器保证此方法最多调用一次。
-    /// 无需 CAS - 简单 store 即可。
     #[inline]
-    pub(crate) fn send(&self, value: T) {
-        // SAFETY: Sender is non-Clone and send() consumes self,
-        // so this method can only be called once. State is guaranteed to be EMPTY.
-        // 
-        // Store value first, then set state to READY.
-        // Release ordering ensures the value write is visible before state change.
+    fn store(&self, value: T) {
+        // SAFETY: Only called once by sender (enforced by ownership)
         unsafe {
             (*self.value.get()).write(value);
         }
         self.state.store(READY, Ordering::Release);
-        
-        // Wake the registered waker if any
-        self.waker.wake();
     }
     
-    /// Try to receive the value without blocking
-    /// 
-    /// 尝试接收值而不阻塞
-    /// 
-    /// # Note
-    /// Receiver is non-Clone, so only one thread can call this.
-    /// Using swap instead of CAS for simplicity.
-    /// 
-    /// # 说明
-    /// Receiver 不可 Clone，只有一个线程可以调用此方法。
-    /// 使用 swap 替代 CAS 更简洁。
     #[inline]
-    fn try_recv(&self) -> Option<T> {
-        // Swap state to EMPTY and check if it was READY
-        // Acquire ordering ensures we see the value written by sender
-        if self.state.swap(EMPTY, Ordering::Acquire) == READY {
-            // SAFETY: State was READY, so value must be initialized.
-            // Receiver is non-Clone, so we have exclusive access.
-            unsafe {
-                Some((*self.value.get()).assume_init_read())
+    fn try_take(&self) -> TakeResult<T> {
+        let state = self.state.swap(EMPTY, Ordering::Acquire);
+        match state {
+            READY => {
+                // SAFETY: State was READY, value is initialized
+                unsafe { TakeResult::Ready((*self.value.get()).assume_init_read()) }
             }
-        } else {
-            None
+            CLOSED => TakeResult::Closed,
+            _ => TakeResult::Pending,
         }
     }
     
-    /// Register a waker to be notified on completion
-    /// 
-    /// 注册一个 waker 以在完成时收到通知
     #[inline]
-    fn register_waker(&self, waker: &std::task::Waker) {
-        self.waker.register(waker);
+    fn is_sender_dropped(&self) -> bool {
+        self.state.load(Ordering::Acquire) == CLOSED
+    }
+    
+    #[inline]
+    fn mark_sender_dropped(&self) {
+        self.state.store(CLOSED, Ordering::Release);
     }
 }
 
-// SAFETY: Inner<T> is Send + Sync as long as T is Send
-// - UnsafeCell<MaybeUninit<T>> is protected by atomic state transitions
-// - Only one thread can access the value at a time (enforced by state machine)
-// - Value is only accessed when state is READY (initialized)
-// - Waker is properly synchronized via AtomicWaker
-//
-// SAFETY: 只要 T 是 Send，Inner<T> 就是 Send + Sync
-// - UnsafeCell<MaybeUninit<T>> 由原子状态转换保护
-// - 每次只有一个线程可以访问值（由状态机强制执行）
-// - 只有在状态为 READY（已初始化）时才访问值
-// - Waker 通过 AtomicWaker 正确同步
-unsafe impl<T: Send> Send for Inner<T> {}
-unsafe impl<T: Send> Sync for Inner<T> {}
-
-impl<T> Drop for Inner<T> {
+impl<T> Drop for GenericStorage<T> {
     fn drop(&mut self) {
         // Clean up the value if it was sent but not received
-        // SAFETY: We have exclusive access in drop (&mut self)
-        // Only drop if state is READY (value was initialized)
         if *self.state.get_mut() == READY {
             unsafe {
-                // Value is initialized, must drop it
                 (*self.value.get()).assume_init_drop();
             }
         }
-        // If state is EMPTY, value is uninitialized, nothing to drop
     }
 }
 
-impl<T> std::fmt::Debug for Inner<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.load(Ordering::Acquire);
-        let state_str = match state {
-            EMPTY => "Empty",
-            READY => "Ready",
-            _ => "Unknown",
-        };
-        f.debug_struct("Inner")
-            .field("state", &state_str)
-            .finish()
-    }
-}
+// ============================================================================
+// Type Aliases
+// ============================================================================
 
-pub mod error {
-    //! Oneshot error types.
+/// Sender for one-shot value transfer of generic types
+/// 
+/// 用于泛型类型一次性值传递的发送器
+pub type Sender<T> = common::Sender<GenericStorage<T>>;
 
-    use std::fmt;
+/// Receiver for one-shot value transfer of generic types
+/// 
+/// 用于泛型类型一次性值传递的接收器
+pub type Receiver<T> = common::Receiver<GenericStorage<T>>;
 
-    /// Error returned when the receiver is dropped before receiving a value
-    /// 
-    /// 当接收器在接收值之前被丢弃时返回的错误
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct RecvError;
-
-    impl fmt::Display for RecvError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "channel closed")
-        }
-    }
-
-    impl std::error::Error for RecvError {}
-}
-
-use self::error::RecvError;
-
+/// Create a new oneshot channel for generic types
+/// 
+/// 创建一个用于泛型类型的新 oneshot 通道
 #[inline]
-pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+pub fn channel<T: Send>() -> (Sender<T>, Receiver<T>) {
     Sender::new()
 }
 
-/// Sender for one-shot value transfer
-/// 
-/// 一次性值传递的发送器
-pub struct Sender<T> {
-    inner: Arc<Inner<T>>,
-}
+// ============================================================================
+// Receiver Extension Methods
+// ============================================================================
 
-impl<T> std::fmt::Debug for Sender<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.inner.state.load(Ordering::Acquire);
-        let state_str = match state {
-            EMPTY => "Empty",
-            READY => "Ready",
-            _ => "Unknown",
-        };
-        f.debug_struct("Sender")
-            .field("state", &state_str)
-            .finish()
-    }
-}
-
-impl<T> Sender<T> {
-    /// Create a new oneshot sender with receiver
-    /// 
-    /// 创建一个新的 oneshot 发送器和接收器
-    /// 
-    /// # Returns
-    /// Returns a tuple of (sender, receiver)
-    /// 
-    /// 返回 (发送器, 接收器) 元组
-    #[inline]
-    pub fn new() -> (Self, Receiver<T>) {
-        let inner = Inner::new();
-        
-        let sender = Sender {
-            inner: inner.clone(),
-        };
-        let receiver = Receiver {
-            inner,
-        };
-        
-        (sender, receiver)
-    }
-    
-    /// Send a value through the channel
-    /// 
-    /// Returns `Err(value)` if the receiver was already dropped.
-    /// This method consumes self, guaranteeing single-use.
-    /// 
-    /// 通过通道发送一个值
-    /// 
-    /// 如果接收器已被丢弃则返回 `Err(value)`。
-    /// 此方法消耗 self，保证单次使用。
-    #[inline]
-    pub fn send(self, value: T) -> Result<(), T> {
-        // Check if receiver is still alive via Arc reference count
-        // If count == 1, only Sender holds a reference, meaning Receiver was dropped
-        if Arc::strong_count(&self.inner) == 1 {
-            return Err(value);
-        }
-        self.send_unchecked(value);
-        Ok(())
-    }
-    
-    /// Send a value without checking if receiver is dropped
-    /// 
-    /// This is faster than `send()` as it skips the Arc reference count check.
-    /// Use this when you know the receiver is still alive, or don't care if
-    /// the value is dropped.
-    /// 
-    /// 发送值而不检查接收器是否已被丢弃
-    /// 
-    /// 这比 `send()` 更快，因为它跳过了 Arc 引用计数检查。
-    /// 当你知道接收器仍然存活，或者不关心值是否被丢弃时使用。
-    #[inline]
-    pub fn send_unchecked(self, value: T) {
-        self.inner.send(value);
-        // Prevent drop from waking receiver again
-        std::mem::forget(self);
-    }
-}
-
-impl<T> Drop for Sender<T> {
-    fn drop(&mut self) {
-        self.inner.waker.wake();
-    }
-}
-
-/// Receiver for one-shot value transfer
-/// 
-/// Implements `Future` directly, allowing direct `.await` usage on both owned values and mutable references
-/// 
-/// 一次性值传递的接收器
-/// 
-/// 直接实现了 `Future`，允许对拥有的值和可变引用都直接使用 `.await`
-/// 
-/// # Examples
-/// 
-/// ## Basic usage
-/// 
-/// ```
-/// use lite_sync::oneshot::generic::Sender;
-/// 
-/// # tokio_test::block_on(async {
-/// let (sender, receiver) = Sender::<String>::new();
-/// 
-/// tokio::spawn(async move {
-///     sender.send("Hello, World!".to_string()).unwrap();
-/// });
-/// 
-/// // Direct await via Future impl
-/// let message = receiver.await.unwrap();
-/// assert_eq!(message, "Hello, World!");
-/// # });
-/// ```
-/// 
-/// ## Awaiting on mutable reference
-/// 
-/// ```
-/// use lite_sync::oneshot::generic::Sender;
-/// 
-/// # tokio_test::block_on(async {
-/// let (sender, mut receiver) = Sender::<i32>::new();
-/// 
-/// tokio::spawn(async move {
-///     sender.send(42).unwrap();
-/// });
-/// 
-/// // Can also await on &mut receiver
-/// let value = (&mut receiver).await.unwrap();
-/// assert_eq!(value, 42);
-/// # });
-/// ```
-pub struct Receiver<T> {
-    inner: Arc<Inner<T>>,
-}
-
-impl<T> std::fmt::Debug for Receiver<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.inner.state.load(Ordering::Acquire);
-        let state_str = match state {
-            EMPTY => "Empty",
-            READY => "Ready",
-            _ => "Unknown",
-        };
-        f.debug_struct("Receiver")
-            .field("state", &state_str)
-            .finish()
-    }
-}
-
-// Receiver is Unpin because all its fields are Unpin
-impl<T> Unpin for Receiver<T> {}
-
-impl<T> Receiver<T> {
-    /// Wait for value asynchronously
-    /// 
-    /// This is equivalent to using `.await` directly on the receiver
-    /// 
-    /// 异步等待值
-    /// 
-    /// 这等同于直接在 receiver 上使用 `.await`
-    /// 
-    /// # Returns
-    /// Returns the received value
-    /// 
-    /// # 返回值
-    /// 返回接收到的值
-    #[inline]
-    pub async fn wait(self) -> Result<T, RecvError> {
-        self.await
-    }
-    
+impl<T: Send> Receiver<T> {
     /// Try to receive a value without blocking
     /// 
     /// Returns `None` if no value has been sent yet
@@ -366,54 +126,7 @@ impl<T> Receiver<T> {
     /// 如果还没有发送值则返回 `None`
     #[inline]
     pub fn try_recv(&mut self) -> Option<T> {
-        self.inner.try_recv()
-    }
-}
-
-/// Direct Future implementation for Receiver
-/// 
-/// This allows both `receiver.await` and `(&mut receiver).await` to work
-/// 
-/// Optimized implementation:
-/// - Fast path: Immediate return if value already sent (no allocation)
-/// - Slow path: Direct waker registration (no Box allocation, just copy two pointers)
-/// - No intermediate future state needed
-/// 
-/// 为 Receiver 直接实现 Future
-/// 
-/// 这允许 `receiver.await` 和 `(&mut receiver).await` 都能工作
-/// 
-/// 优化实现：
-/// - 快速路径：如值已发送则立即返回（无分配）
-/// - 慢速路径：直接注册 waker（无 Box 分配，只复制两个指针）
-/// - 无需中间 future 状态
-impl<T> Future for Receiver<T> {
-    type Output = Result<T, RecvError>;
-    
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: Receiver is Unpin, so we can safely get a mutable reference
-        let this = self.get_mut();
-        
-        // Fast path: check if value already sent
-        if let Some(value) = this.inner.try_recv() {
-            return Poll::Ready(Ok(value));
-        }
-        
-        // Slow path: register waker for notification
-        this.inner.register_waker(cx.waker());
-        
-        // Check again after registering waker to avoid race condition
-        // The sender might have sent between our first check and waker registration
-        if let Some(value) = this.inner.try_recv() {
-            return Poll::Ready(Ok(value));
-        }
-        
-        // Check if sender dropped
-        if Arc::strong_count(&this.inner) == 1 {
-            return Poll::Ready(Err(RecvError));
-        }
-
-        Poll::Pending
+        self.inner.try_recv().ok()
     }
 }
 
