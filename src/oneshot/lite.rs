@@ -66,6 +66,10 @@ pub use super::common::TryRecvError;
 ///     fn closed_value() -> u8 {
 ///         255
 ///     }
+///     
+///     fn receiver_closed_value() -> u8 {
+///         254
+///     }
 /// }
 /// 
 /// # tokio_test::block_on(async {
@@ -102,6 +106,11 @@ pub trait State: Sized + Send + Sync + 'static {
     /// 
     /// 已关闭状态值（发送器被丢弃而未发送）
     fn closed_value() -> u8;
+    
+    /// The receiver closed state value
+    /// 
+    /// 接收器关闭状态值
+    fn receiver_closed_value() -> u8;
 }
 
 /// Implementation for unit type () - simple completion notification without state
@@ -128,7 +137,12 @@ impl State for () {
     
     #[inline]
     fn closed_value() -> u8 {
-        255 // Closed
+        255 // Sender closed
+    }
+    
+    #[inline]
+    fn receiver_closed_value() -> u8 {
+        254 // Receiver closed
     }
 }
 
@@ -167,7 +181,7 @@ impl<S: State> OneshotStorage for LiteStorage<S> {
     fn try_take(&self) -> TakeResult<S> {
         let current = self.state.load(Ordering::Acquire);
         
-        if current == S::closed_value() {
+        if current == S::closed_value() || current == S::receiver_closed_value() {
             return TakeResult::Closed;
         }
         
@@ -191,6 +205,16 @@ impl<S: State> OneshotStorage for LiteStorage<S> {
     #[inline]
     fn mark_sender_dropped(&self) {
         self.state.store(S::closed_value(), Ordering::Release);
+    }
+    
+    #[inline]
+    fn is_receiver_closed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == S::receiver_closed_value()
+    }
+    
+    #[inline]
+    fn mark_receiver_closed(&self) {
+        self.state.store(S::receiver_closed_value(), Ordering::Release);
     }
 }
 
@@ -295,6 +319,10 @@ mod tests {
         fn closed_value() -> u8 {
             255
         }
+        
+        fn receiver_closed_value() -> u8 {
+            254
+        }
     }
     
     #[tokio::test]
@@ -377,6 +405,10 @@ mod tests {
         
         fn closed_value() -> u8 {
             255
+        }
+        
+        fn receiver_closed_value() -> u8 {
+            254
         }
     }
     
@@ -578,6 +610,75 @@ mod tests {
         
         // Recv should return error
         let result = receiver.recv().await;
+        assert_eq!(result, Err(RecvError));
+    }
+    
+    // Tests for is_closed
+    #[test]
+    fn test_sender_is_closed_initially_false() {
+        let (sender, _receiver) = Sender::<()>::new();
+        assert!(!sender.is_closed());
+    }
+    
+    #[test]
+    fn test_sender_is_closed_after_receiver_drop() {
+        let (sender, receiver) = Sender::<()>::new();
+        drop(receiver);
+        assert!(sender.is_closed());
+    }
+    
+    #[test]
+    fn test_sender_is_closed_after_receiver_close() {
+        let (sender, mut receiver) = Sender::<()>::new();
+        receiver.close();
+        assert!(sender.is_closed());
+    }
+    
+    // Tests for close
+    #[test]
+    fn test_receiver_close_prevents_send() {
+        let (sender, mut receiver) = Sender::<TestCompletion>::new();
+        receiver.close();
+        
+        // Send should fail after close
+        assert!(sender.send(TestCompletion::Called).is_err());
+    }
+    
+    // Tests for blocking_recv
+    #[test]
+    fn test_blocking_recv_immediate() {
+        let (sender, receiver) = Sender::<TestCompletion>::new();
+        
+        // Send before blocking_recv (fast path)
+        sender.send(TestCompletion::Called).unwrap();
+        
+        let result = receiver.blocking_recv();
+        assert_eq!(result, Ok(TestCompletion::Called));
+    }
+    
+    #[test]
+    fn test_blocking_recv_with_thread() {
+        let (sender, receiver) = Sender::<()>::new();
+        
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            sender.send(()).unwrap();
+        });
+        
+        let result = receiver.blocking_recv();
+        assert_eq!(result, Ok(()));
+    }
+    
+    #[test]
+    fn test_blocking_recv_sender_dropped() {
+        let (sender, receiver) = Sender::<()>::new();
+        
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            drop(sender);
+        });
+        
+        let result = receiver.blocking_recv();
         assert_eq!(result, Err(RecvError));
     }
 }

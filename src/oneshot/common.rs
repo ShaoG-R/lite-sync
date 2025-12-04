@@ -114,6 +114,16 @@ pub trait OneshotStorage: Send + Sync + Sized {
     
     /// Mark as sender dropped (called in Sender::drop)
     fn mark_sender_dropped(&self);
+    
+    /// Check if the receiver was closed
+    /// 
+    /// 检查接收器是否已关闭
+    fn is_receiver_closed(&self) -> bool;
+    
+    /// Mark as receiver closed (called in Receiver::close)
+    /// 
+    /// 标记接收器已关闭
+    fn mark_receiver_closed(&self);
 }
 
 // ============================================================================
@@ -192,10 +202,10 @@ impl<S: OneshotStorage> Sender<S> {
     
     /// Send a value through the channel
     /// 
-    /// Returns `Err(value)` if the receiver was already dropped.
+    /// Returns `Err(value)` if the receiver was already dropped or closed.
     #[inline]
     pub fn send(self, value: S::Value) -> Result<(), S::Value> {
-        if Arc::strong_count(&self.inner) == 1 {
+        if self.is_closed() {
             return Err(value);
         }
         self.send_unchecked(value);
@@ -209,6 +219,15 @@ impl<S: OneshotStorage> Sender<S> {
     pub fn send_unchecked(self, value: S::Value) {
         self.inner.send(value);
         std::mem::forget(self);
+    }
+    
+    /// Check if the receiver has been closed or dropped
+    /// 
+    /// 检查接收器是否已关闭或丢弃
+    #[inline]
+    pub fn is_closed(&self) -> bool {
+        // Receiver is closed if it was explicitly closed or dropped (Arc count == 1)
+        self.inner.storage.is_receiver_closed() || Arc::strong_count(&self.inner) == 1
     }
 }
 
@@ -247,6 +266,102 @@ impl<S: OneshotStorage> Receiver<S> {
     #[inline]
     pub async fn wait(self) -> Result<S::Value, RecvError> {
         self.await
+    }
+    
+    /// Close the receiver, preventing any future messages from being sent.
+    /// 
+    /// Any `send` operation which happens after this method returns is guaranteed
+    /// to fail. After calling `close`, `try_recv` should be called to receive
+    /// a value if one was sent before the call to `close` completed.
+    /// 
+    /// 关闭接收器，阻止任何将来的消息发送。
+    /// 
+    /// 在此方法返回后发生的任何 `send` 操作都保证失败。
+    /// 调用 `close` 后，应调用 `try_recv` 来接收在 `close` 完成之前发送的值。
+    #[inline]
+    pub fn close(&mut self) {
+        self.inner.storage.mark_receiver_closed();
+    }
+    
+    /// Blocking receive, waiting for a value to be sent.
+    /// 
+    /// This method is intended for use in synchronous code.
+    /// 
+    /// # Panics
+    /// 
+    /// This function panics if called within an asynchronous execution context.
+    /// 
+    /// 阻塞接收，等待值被发送。
+    /// 
+    /// 此方法用于同步代码中。
+    /// 
+    /// # Panics
+    /// 
+    /// 如果在异步执行上下文中调用此函数，则会 panic。
+    #[inline]
+    pub fn blocking_recv(self) -> Result<S::Value, RecvError> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::task::{RawWaker, RawWakerVTable, Waker};
+        
+        // Fast path: check if value is already ready
+        match self.inner.storage.try_take() {
+            TakeResult::Ready(value) => return Ok(value),
+            TakeResult::Closed => return Err(RecvError),
+            TakeResult::Pending => {}
+        }
+        
+        // Create a thread-parker waker
+        struct ThreadParker {
+            thread: std::thread::Thread,
+            notified: AtomicBool,
+        }
+        
+        const VTABLE: RawWakerVTable = RawWakerVTable::new(
+            |ptr| unsafe { 
+                Arc::increment_strong_count(ptr as *const ThreadParker);
+                RawWaker::new(ptr, &VTABLE)
+            },
+            |ptr| unsafe {
+                let parker = Arc::from_raw(ptr as *const ThreadParker);
+                parker.notified.store(true, Ordering::Release);
+                parker.thread.unpark();
+            },
+            |ptr| unsafe {
+                let parker = &*(ptr as *const ThreadParker);
+                parker.notified.store(true, Ordering::Release);
+                parker.thread.unpark();
+            },
+            |ptr| unsafe { Arc::decrement_strong_count(ptr as *const ThreadParker); },
+        );
+        
+        let parker = Arc::new(ThreadParker {
+            thread: std::thread::current(),
+            notified: AtomicBool::new(false),
+        });
+        
+        let raw_waker = RawWaker::new(Arc::into_raw(parker.clone()) as *const (), &VTABLE);
+        let waker = unsafe { Waker::from_raw(raw_waker) };
+        
+        // Register waker and poll
+        self.inner.register_waker(&waker);
+        
+        loop {
+            match self.inner.storage.try_take() {
+                TakeResult::Ready(value) => return Ok(value),
+                TakeResult::Closed => return Err(RecvError),
+                TakeResult::Pending => {}
+            }
+            
+            // Check if sender dropped
+            if Arc::strong_count(&self.inner) == 1 && self.inner.is_sender_dropped() {
+                return Err(RecvError);
+            }
+            
+            // Park if not notified
+            if !parker.notified.swap(false, Ordering::Acquire) {
+                std::thread::park();
+            }
+        }
     }
 }
 

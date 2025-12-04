@@ -14,9 +14,10 @@ pub use super::common::RecvError;
 pub use super::common::TryRecvError;
 
 // States for the value cell
-const EMPTY: u8 = 0;    // No value stored
-const READY: u8 = 1;    // Value is ready
-const CLOSED: u8 = 2;   // Sender dropped without sending
+const EMPTY: u8 = 0;            // No value stored
+const READY: u8 = 1;            // Value is ready
+const SENDER_CLOSED: u8 = 2;    // Sender dropped without sending
+const RECEIVER_CLOSED: u8 = 3;  // Receiver closed
 
 // ============================================================================
 // Generic Storage
@@ -64,19 +65,29 @@ impl<T: Send> OneshotStorage for GenericStorage<T> {
                 // SAFETY: State was READY, value is initialized
                 unsafe { TakeResult::Ready((*self.value.get()).assume_init_read()) }
             }
-            CLOSED => TakeResult::Closed,
+            SENDER_CLOSED | RECEIVER_CLOSED => TakeResult::Closed,
             _ => TakeResult::Pending,
         }
     }
     
     #[inline]
     fn is_sender_dropped(&self) -> bool {
-        self.state.load(Ordering::Acquire) == CLOSED
+        self.state.load(Ordering::Acquire) == SENDER_CLOSED
     }
     
     #[inline]
     fn mark_sender_dropped(&self) {
-        self.state.store(CLOSED, Ordering::Release);
+        self.state.store(SENDER_CLOSED, Ordering::Release);
+    }
+    
+    #[inline]
+    fn is_receiver_closed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == RECEIVER_CLOSED
+    }
+    
+    #[inline]
+    fn mark_receiver_closed(&self) {
+        self.state.store(RECEIVER_CLOSED, Ordering::Release);
     }
 }
 
@@ -287,5 +298,74 @@ mod tests {
         
         let result = receiver.await.unwrap();
         assert_eq!(result.len(), 1024 * 1024);
+    }
+    
+    // Tests for is_closed
+    #[test]
+    fn test_sender_is_closed_initially_false() {
+        let (sender, _receiver) = Sender::<i32>::new();
+        assert!(!sender.is_closed());
+    }
+    
+    #[test]
+    fn test_sender_is_closed_after_receiver_drop() {
+        let (sender, receiver) = Sender::<i32>::new();
+        drop(receiver);
+        assert!(sender.is_closed());
+    }
+    
+    #[test]
+    fn test_sender_is_closed_after_receiver_close() {
+        let (sender, mut receiver) = Sender::<i32>::new();
+        receiver.close();
+        assert!(sender.is_closed());
+    }
+    
+    // Tests for close
+    #[test]
+    fn test_receiver_close_prevents_send() {
+        let (sender, mut receiver) = Sender::<i32>::new();
+        receiver.close();
+        
+        // Send should fail after close
+        assert!(sender.send(42).is_err());
+    }
+    
+    // Tests for blocking_recv
+    #[test]
+    fn test_blocking_recv_immediate() {
+        let (sender, receiver) = Sender::<i32>::new();
+        
+        // Send before blocking_recv (fast path)
+        sender.send(42).unwrap();
+        
+        let result = receiver.blocking_recv();
+        assert_eq!(result, Ok(42));
+    }
+    
+    #[test]
+    fn test_blocking_recv_with_thread() {
+        let (sender, receiver) = Sender::<String>::new();
+        
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            sender.send("hello".to_string()).unwrap();
+        });
+        
+        let result = receiver.blocking_recv();
+        assert_eq!(result, Ok("hello".to_string()));
+    }
+    
+    #[test]
+    fn test_blocking_recv_sender_dropped() {
+        let (sender, receiver) = Sender::<i32>::new();
+        
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            drop(sender);
+        });
+        
+        let result = receiver.blocking_recv();
+        assert_eq!(result, Err(RecvError));
     }
 }
