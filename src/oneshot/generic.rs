@@ -166,19 +166,27 @@ impl<T> std::fmt::Debug for Inner<T> {
     }
 }
 
-/// Error returned when the receiver is dropped before receiving a value
-/// 
-/// 当接收器在接收值之前被丢弃时返回的错误
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RecvError;
+pub mod error {
+    //! Oneshot error types.
 
-impl std::fmt::Display for RecvError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "channel closed")
+    use std::fmt;
+
+    /// Error returned when the receiver is dropped before receiving a value
+    /// 
+    /// 当接收器在接收值之前被丢弃时返回的错误
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct RecvError;
+
+    impl fmt::Display for RecvError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "channel closed")
+        }
     }
+
+    impl std::error::Error for RecvError {}
 }
 
-impl std::error::Error for RecvError {}
+use self::error::RecvError;
 
 #[inline]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -242,6 +250,12 @@ impl<T> Sender<T> {
     }
 }
 
+impl<T> Drop for Sender<T> {
+    fn drop(&mut self) {
+        self.inner.waker.wake();
+    }
+}
+
 /// Receiver for one-shot value transfer
 /// 
 /// Implements `Future` directly, allowing direct `.await` usage on both owned values and mutable references
@@ -265,7 +279,7 @@ impl<T> Sender<T> {
 /// });
 /// 
 /// // Direct await via Future impl
-/// let message = receiver.await;
+/// let message = receiver.await.unwrap();
 /// assert_eq!(message, "Hello, World!");
 /// # });
 /// ```
@@ -283,7 +297,7 @@ impl<T> Sender<T> {
 /// });
 /// 
 /// // Can also await on &mut receiver
-/// let value = (&mut receiver).await;
+/// let value = (&mut receiver).await.unwrap();
 /// assert_eq!(value, 42);
 /// # });
 /// ```
@@ -323,7 +337,7 @@ impl<T> Receiver<T> {
     /// # 返回值
     /// 返回接收到的值
     #[inline]
-    pub async fn wait(self) -> T {
+    pub async fn wait(self) -> Result<T, RecvError> {
         self.await
     }
     
@@ -358,7 +372,7 @@ impl<T> Receiver<T> {
 /// - 慢速路径：直接注册 waker（无 Box 分配，只复制两个指针）
 /// - 无需中间 future 状态
 impl<T> Future for Receiver<T> {
-    type Output = T;
+    type Output = Result<T, RecvError>;
     
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: Receiver is Unpin, so we can safely get a mutable reference
@@ -366,7 +380,7 @@ impl<T> Future for Receiver<T> {
         
         // Fast path: check if value already sent
         if let Some(value) = this.inner.try_recv() {
-            return Poll::Ready(value);
+            return Poll::Ready(Ok(value));
         }
         
         // Slow path: register waker for notification
@@ -375,9 +389,14 @@ impl<T> Future for Receiver<T> {
         // Check again after registering waker to avoid race condition
         // The sender might have sent between our first check and waker registration
         if let Some(value) = this.inner.try_recv() {
-            return Poll::Ready(value);
+            return Poll::Ready(Ok(value));
         }
         
+        // Check if sender dropped
+        if Arc::strong_count(&this.inner) == 1 {
+            return Poll::Ready(Err(RecvError));
+        }
+
         Poll::Pending
     }
 }
@@ -395,7 +414,7 @@ mod tests {
             sender.send("Hello".to_string()).unwrap();
         });
         
-        let result = receiver.wait().await;
+        let result = receiver.wait().await.unwrap();
         assert_eq!(result, "Hello");
     }
     
@@ -408,7 +427,7 @@ mod tests {
             sender.send(42).unwrap();
         });
         
-        let result = receiver.wait().await;
+        let result = receiver.wait().await.unwrap();
         assert_eq!(result, 42);
     }
     
@@ -419,7 +438,7 @@ mod tests {
         // Send before waiting (fast path)
         sender.send("Immediate".to_string()).unwrap();
         
-        let result = receiver.wait().await;
+        let result = receiver.wait().await.unwrap();
         assert_eq!(result, "Immediate");
     }
     
@@ -443,7 +462,7 @@ mod tests {
             sender.send(data).unwrap();
         });
         
-        let result = receiver.wait().await;
+        let result = receiver.wait().await.unwrap();
         assert_eq!(result.id, 123);
         assert_eq!(result.name, "Test");
     }
@@ -458,7 +477,7 @@ mod tests {
         });
         
         // Direct await without .wait()
-        let result = receiver.await;
+        let result = receiver.await.unwrap();
         assert_eq!(result, 99);
     }
     
@@ -472,7 +491,7 @@ mod tests {
         });
         
         // Await on mutable reference
-        let result = (&mut receiver).await;
+        let result = (&mut receiver).await.unwrap();
         assert_eq!(result, "Mutable");
     }
     
@@ -484,7 +503,7 @@ mod tests {
         sender.send(vec![1, 2, 3]).unwrap();
         
         // Direct await
-        let result = receiver.await;
+        let result = receiver.await.unwrap();
         assert_eq!(result, vec![1, 2, 3]);
     }
     
@@ -503,6 +522,13 @@ mod tests {
     }
     
     #[tokio::test]
+    async fn test_oneshot_dropped() {
+        let (sender, receiver) = Sender::<i32>::new();
+        drop(sender);
+        assert_eq!(receiver.await, Err(RecvError));
+    }
+
+    #[tokio::test]
     async fn test_oneshot_large_data() {
         let (sender, receiver) = Sender::<Vec<u8>>::new();
         
@@ -512,7 +538,7 @@ mod tests {
             sender.send(large_vec).unwrap();
         });
         
-        let result = receiver.await;
+        let result = receiver.await.unwrap();
         assert_eq!(result.len(), 1024 * 1024);
     }
 }

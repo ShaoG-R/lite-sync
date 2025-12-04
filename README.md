@@ -73,7 +73,7 @@ Based on Tokio's `AtomicWaker` but simplified for specific use cases. Provides s
 ### One-shot completion with custom state
 
 ```rust
-use lite_sync::oneshot::{State, Sender};
+use lite_sync::oneshot::lite::{State, Sender};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskResult {
@@ -167,7 +167,7 @@ async fn main() {
 ### Simple completion notification (unit type)
 
 ```rust
-use lite_sync::oneshot::Sender;
+use lite_sync::oneshot::lite::Sender;
 
 #[tokio::main]
 async fn main() {

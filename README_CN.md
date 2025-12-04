@@ -73,7 +73,7 @@ lite-sync = "0.1"
 ### 带有自定义状态的一次性完成通知
 
 ```rust
-use lite_sync::oneshot::{State, Sender};
+use lite_sync::oneshot::lite::{State, Sender};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskResult {
@@ -167,7 +167,7 @@ async fn main() {
 ### 简单的完成通知（单元类型）
 
 ```rust
-use lite_sync::oneshot::Sender;
+use lite_sync::oneshot::lite::Sender;
 
 #[tokio::main]
 async fn main() {

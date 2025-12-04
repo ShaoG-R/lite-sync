@@ -248,7 +248,7 @@ impl<Req, Resp> SideA<Req, Resp> {
         self.inner.b_waker.wake();
         
         // Wait for response
-        Ok(response_rx.await)
+        response_rx.await.map_err(|_| ChannelError::Closed)
     }
     
     /// Try to send a request without waiting for response
@@ -278,7 +278,7 @@ impl<Req, Resp> SideA<Req, Resp> {
         
         // Return future that waits for response
         Ok(async move {
-            Ok(response_rx.await)
+            response_rx.await.map_err(|_| ChannelError::Closed)
         })
     }
 }

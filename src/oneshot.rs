@@ -70,7 +70,7 @@
 ///     sender.send(result).unwrap();
 /// });
 /// 
-/// let message = receiver.await;
+/// let message = receiver.await.unwrap();
 /// assert_eq!(message, "Hello, World!");
 /// # });
 /// ```
