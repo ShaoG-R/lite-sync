@@ -32,9 +32,36 @@ pub mod error {
     }
 
     impl std::error::Error for RecvError {}
+
+    /// Error returned from `try_recv` when no value has been sent yet or channel is closed
+    /// 
+    /// 当尚未发送值或通道已关闭时，`try_recv` 返回的错误
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum TryRecvError {
+        /// The channel is empty (no value sent yet)
+        /// 
+        /// 通道为空（尚未发送值）
+        Empty,
+        /// The sender was dropped without sending a value
+        /// 
+        /// 发送器在发送值之前被丢弃
+        Closed,
+    }
+
+    impl fmt::Display for TryRecvError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                TryRecvError::Empty => write!(f, "channel empty"),
+                TryRecvError::Closed => write!(f, "channel closed"),
+            }
+        }
+    }
+
+    impl std::error::Error for TryRecvError {}
 }
 
 pub use self::error::RecvError;
+pub use self::error::TryRecvError;
 
 // ============================================================================
 // Storage Trait

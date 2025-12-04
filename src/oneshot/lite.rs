@@ -9,6 +9,7 @@ use super::common::{OneshotStorage, TakeResult};
 // Re-export common types
 pub use super::common::error;
 pub use super::common::RecvError;
+pub use super::common::TryRecvError;
 
 // ============================================================================
 // State Trait
@@ -234,19 +235,19 @@ impl<S: State> Receiver<S> {
     
     /// Try to receive a value without blocking
     /// 
-    /// Returns `Ok(Some(value))` if value is ready, `Ok(None)` if pending,
-    /// or `Err(RecvError)` if sender was dropped.
+    /// Returns `Ok(value)` if value is ready, `Err(TryRecvError::Empty)` if pending,
+    /// or `Err(TryRecvError::Closed)` if sender was dropped.
     /// 
     /// 尝试接收值而不阻塞
     /// 
-    /// 如果值就绪返回 `Ok(Some(value))`，如果待处理返回 `Ok(None)`，
-    /// 如果发送器被丢弃返回 `Err(RecvError)`
+    /// 如果值就绪返回 `Ok(value)`，如果待处理返回 `Err(TryRecvError::Empty)`，
+    /// 如果发送器被丢弃返回 `Err(TryRecvError::Closed)`
     #[inline]
-    pub fn try_recv(&mut self) -> Result<Option<S>, RecvError> {
+    pub fn try_recv(&mut self) -> Result<S, TryRecvError> {
         match self.inner.try_recv() {
-            TakeResult::Ready(v) => Ok(Some(v)),
-            TakeResult::Pending => Ok(None),
-            TakeResult::Closed => Err(RecvError),
+            TakeResult::Ready(v) => Ok(v),
+            TakeResult::Pending => Err(TryRecvError::Empty),
+            TakeResult::Closed => Err(TryRecvError::Closed),
         }
     }
 }
@@ -516,7 +517,7 @@ mod tests {
         
         // Try receive before sending
         let result = receiver.try_recv();
-        assert_eq!(result, Ok(None));
+        assert_eq!(result, Err(TryRecvError::Empty));
     }
     
     #[tokio::test]
@@ -528,7 +529,7 @@ mod tests {
         
         // Try receive after sending
         let result = receiver.try_recv();
-        assert_eq!(result, Ok(Some(TestCompletion::Called)));
+        assert_eq!(result, Ok(TestCompletion::Called));
     }
     
     #[tokio::test]
@@ -540,7 +541,7 @@ mod tests {
         
         // Try receive should return error
         let result = receiver.try_recv();
-        assert_eq!(result, Err(RecvError));
+        assert_eq!(result, Err(TryRecvError::Closed));
     }
     
     // Tests for sender dropped behavior

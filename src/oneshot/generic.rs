@@ -11,6 +11,7 @@ use super::common::{self, OneshotStorage, TakeResult};
 // Re-export common types
 pub use super::common::error;
 pub use super::common::RecvError;
+pub use super::common::TryRecvError;
 
 // States for the value cell
 const EMPTY: u8 = 0;    // No value stored
@@ -119,14 +120,20 @@ pub fn channel<T: Send>() -> (Sender<T>, Receiver<T>) {
 impl<T: Send> Receiver<T> {
     /// Try to receive a value without blocking
     /// 
-    /// Returns `None` if no value has been sent yet
+    /// Returns `Ok(value)` if value is ready, `Err(TryRecvError::Empty)` if pending,
+    /// or `Err(TryRecvError::Closed)` if sender was dropped.
     /// 
     /// 尝试接收值而不阻塞
     /// 
-    /// 如果还没有发送值则返回 `None`
+    /// 如果值就绪返回 `Ok(value)`，如果待处理返回 `Err(TryRecvError::Empty)`，
+    /// 如果发送器被丢弃返回 `Err(TryRecvError::Closed)`
     #[inline]
-    pub fn try_recv(&mut self) -> Option<T> {
-        self.inner.try_recv().ok()
+    pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
+        match self.inner.try_recv() {
+            super::common::TakeResult::Ready(v) => Ok(v),
+            super::common::TakeResult::Pending => Err(TryRecvError::Empty),
+            super::common::TakeResult::Closed => Err(TryRecvError::Closed),
+        }
     }
 }
 
@@ -241,13 +248,24 @@ mod tests {
         let (sender, mut receiver) = Sender::<i32>::new();
         
         // Try receive before sending
-        assert_eq!(receiver.try_recv(), None);
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
         
         // Send value
         sender.send(42).unwrap();
         
         // Try receive after sending
-        assert_eq!(receiver.try_recv(), Some(42));
+        assert_eq!(receiver.try_recv(), Ok(42));
+    }
+    
+    #[tokio::test]
+    async fn test_oneshot_try_recv_closed() {
+        let (sender, mut receiver) = Sender::<i32>::new();
+        
+        // Drop sender without sending
+        drop(sender);
+        
+        // Try receive should return Closed error
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Closed));
     }
     
     #[tokio::test]
