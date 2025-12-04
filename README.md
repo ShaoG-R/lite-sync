@@ -107,7 +107,7 @@ async fn main() {
     
     tokio::spawn(async move {
         // Do some work...
-        sender.notify(TaskResult::Success);
+        sender.send(TaskResult::Success);
     });
     
     // Use recv() to receive asynchronously, or direct .await
@@ -175,7 +175,7 @@ async fn main() {
     
     tokio::spawn(async move {
         // Task completes
-        sender.notify(());
+        sender.send(());
     });
     
     // Use recv() or direct .await, returns Result

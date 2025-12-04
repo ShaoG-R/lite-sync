@@ -147,7 +147,7 @@
 //! 
 //! tokio::spawn(async move {
 //!     // Do some work...
-//!     sender.notify(TaskResult::Success);
+//!     sender.send(TaskResult::Success);
 //! });
 //! 
 //! let result = receiver.await;

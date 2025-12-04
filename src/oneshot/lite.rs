@@ -85,7 +85,7 @@ use self::error::RecvError;
 /// // Usage:
 /// let (notifier, receiver) = Sender::<CustomState>::new();
 /// tokio::spawn(async move {
-///     notifier.notify(CustomState::Success);
+///     notifier.send(CustomState::Success);
 /// });
 /// let result = receiver.await; // Direct await
 /// assert_eq!(result, Ok(CustomState::Success));
@@ -272,11 +272,11 @@ impl<T: State> Sender<T> {
         (notifier, receiver)
     }
     
-    /// Notify completion with the given state
+    /// Send a completion notification with the given state
     /// 
-    /// 使用给定状态通知完成
+    /// 使用给定状态发送完成通知
     #[inline]
-    pub fn notify(&self, state: T) {
+    pub fn send(&self, state: T) {
         self.inner.send(state);
     }
 }
@@ -325,7 +325,7 @@ impl<T: State> Drop for Sender<T> {
 /// 
 /// tokio::spawn(async move {
 ///     // ... do work ...
-///     notifier.notify(());  // Signal completion
+///     notifier.send(());  // Signal completion
 /// });
 /// 
 /// // Two equivalent ways to await:
@@ -344,7 +344,7 @@ impl<T: State> Drop for Sender<T> {
 /// 
 /// tokio::spawn(async move {
 ///     // ... do work ...
-///     notifier.notify(());
+///     notifier.send(());
 /// });
 /// 
 /// // Can also await on &mut receiver
@@ -396,7 +396,7 @@ impl<T: State> Drop for Sender<T> {
 /// let (notifier, receiver) = Sender::<CustomState>::new();
 /// 
 /// tokio::spawn(async move {
-///     notifier.notify(CustomState::Success);
+///     notifier.send(CustomState::Success);
 /// });
 /// 
 /// match receiver.await {
@@ -599,7 +599,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(TestCompletion::Called);
+            notifier.send(TestCompletion::Called);
         });
         
         let result = receiver.recv().await;
@@ -612,7 +612,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(TestCompletion::Cancelled);
+            notifier.send(TestCompletion::Cancelled);
         });
         
         let result = receiver.recv().await;
@@ -624,7 +624,7 @@ mod tests {
         let (notifier, receiver) = Sender::<TestCompletion>::new();
         
         // Notify before waiting (fast path)
-        notifier.notify(TestCompletion::Called);
+        notifier.send(TestCompletion::Called);
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(TestCompletion::Called));
@@ -635,7 +635,7 @@ mod tests {
         let (notifier, receiver) = Sender::<TestCompletion>::new();
         
         // Notify before waiting (fast path)
-        notifier.notify(TestCompletion::Cancelled);
+        notifier.send(TestCompletion::Cancelled);
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(TestCompletion::Cancelled));
@@ -682,7 +682,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(CustomState::Success);
+            notifier.send(CustomState::Success);
         });
         
         let result = receiver.recv().await;
@@ -694,7 +694,7 @@ mod tests {
         let (notifier, receiver) = Sender::<CustomState>::new();
         
         // Immediate notification
-        notifier.notify(CustomState::Timeout);
+        notifier.send(CustomState::Timeout);
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(CustomState::Timeout));
@@ -706,7 +706,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(());
+            notifier.send(());
         });
         
         let result = receiver.recv().await;
@@ -718,7 +718,7 @@ mod tests {
         let (notifier, receiver) = Sender::<()>::new();
         
         // Immediate notification (fast path)
-        notifier.notify(());
+        notifier.send(());
         
         let result = receiver.recv().await;
         assert_eq!(result, Ok(()));
@@ -731,7 +731,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(TestCompletion::Called);
+            notifier.send(TestCompletion::Called);
         });
         
         // Direct await without .wait()
@@ -744,7 +744,7 @@ mod tests {
         let (notifier, receiver) = Sender::<TestCompletion>::new();
         
         // Notify before awaiting (fast path)
-        notifier.notify(TestCompletion::Cancelled);
+        notifier.send(TestCompletion::Cancelled);
         
         // Direct await
         let result = receiver.await;
@@ -757,7 +757,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(());
+            notifier.send(());
         });
         
         // Direct await with unit type
@@ -771,7 +771,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(CustomState::Failure);
+            notifier.send(CustomState::Failure);
         });
         
         // Direct await with custom state
@@ -786,7 +786,7 @@ mod tests {
         
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            notifier.notify(TestCompletion::Called);
+            notifier.send(TestCompletion::Called);
         });
         
         // Await on mutable reference
@@ -799,7 +799,7 @@ mod tests {
         let (notifier, mut receiver) = Sender::<()>::new();
         
         // Immediate notification
-        notifier.notify(());
+        notifier.send(());
         
         // Await on mutable reference (fast path)
         let result = (&mut receiver).await;
@@ -821,7 +821,7 @@ mod tests {
         let (notifier, mut receiver) = Sender::<TestCompletion>::new();
         
         // Send value
-        notifier.notify(TestCompletion::Called);
+        notifier.send(TestCompletion::Called);
         
         // Try receive after sending
         let result = receiver.try_recv();

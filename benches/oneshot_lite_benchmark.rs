@@ -45,7 +45,7 @@ fn bench_oneshot_send_recv_comparison(c: &mut Criterion) {
                 let start = std::time::Instant::now();
                 
                 // Send and receive
-                notifier.notify(());
+                notifier.send(());
                 let _value = receiver.recv().await;
                 
                 total_duration += start.elapsed();
@@ -107,7 +107,7 @@ fn bench_oneshot_batch_comparison(c: &mut Criterion) {
                         
                         // Send all
                         for ch in &channels {
-                            ch.0.notify(());
+                            ch.0.send(());
                         }
                         
                         // Receive all
@@ -189,7 +189,7 @@ fn bench_oneshot_cross_task_comparison(c: &mut Criterion) {
                 });
                 
                 // Send from main task
-                notifier.notify(());
+                notifier.send(());
                 
                 // Wait for receiver
                 let _value = receiver_handle.await.unwrap();
@@ -252,7 +252,7 @@ fn bench_oneshot_immediate_notification(c: &mut Criterion) {
                 let start = std::time::Instant::now();
                 
                 // Send BEFORE receiving (should use fast path)
-                notifier.notify(());
+                notifier.send(());
                 
                 // Receive (should complete immediately via fast path)
                 let _value = receiver.recv().await;
@@ -335,7 +335,7 @@ fn bench_oneshot_drop_comparison(c: &mut Criterion) {
             || {
                 // Setup: create and notify (not measured)
                 let (notifier, receiver) = channel::<()>();
-                notifier.notify(());
+                notifier.send(());
                 receiver
             },
             |receiver| {

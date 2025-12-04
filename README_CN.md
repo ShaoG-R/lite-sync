@@ -107,7 +107,7 @@ async fn main() {
     
     tokio::spawn(async move {
         // 执行一些工作...
-        sender.notify(TaskResult::Success);
+        sender.send(TaskResult::Success);
     });
     
     // 使用 recv() 异步接收，或直接 .await
@@ -175,7 +175,7 @@ async fn main() {
     
     tokio::spawn(async move {
         // 任务完成
-        sender.notify(());
+        sender.send(());
     });
     
     // 使用 recv() 或直接 .await，返回 Result

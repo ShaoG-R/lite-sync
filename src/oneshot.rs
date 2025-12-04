@@ -33,7 +33,7 @@
 /// 
 /// tokio::spawn(async move {
 ///     // ... do work ...
-///     sender.notify(());
+///     sender.send(());
 /// });
 /// 
 /// receiver.await; // Wait for completion
