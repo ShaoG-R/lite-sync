@@ -32,3 +32,11 @@ harness = false
 [[bench]]
 name = "channel_benchmark"
 harness = false
+
+[[bench]]
+name = "oneshot_lite_benchmark"
+harness = false
+
+[[bench]]
+name = "oneshot_generic_benchmark"
+harness = false
