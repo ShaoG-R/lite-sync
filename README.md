@@ -26,7 +26,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-lite-sync = "0.1"
+lite-sync = "0.2"
 ```
 
 ## Modules

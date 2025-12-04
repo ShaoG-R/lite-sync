@@ -26,7 +26,7 @@
 
 ```toml
 [dependencies]
-lite-sync = "0.1"
+lite-sync = "0.2"
 ```
 
 ## 模块
