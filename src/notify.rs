@@ -1,13 +1,13 @@
-/// Lightweight single-waiter notification primitive
-/// 
-/// Optimized for SPSC (Single Producer Single Consumer) pattern where
-/// only one task waits at a time. Much lighter than tokio::sync::Notify.
-/// 
-/// 轻量级单等待者通知原语
-/// 
-/// 为 SPSC（单生产者单消费者）模式优化，其中每次只有一个任务等待。
-/// 比 tokio::sync::Notify 更轻量。
-use std::sync::atomic::{AtomicU8, Ordering};
+//! Lightweight single-waiter notification primitive
+//!
+//! Optimized for SPSC (Single Producer Single Consumer) pattern where
+//! only one task waits at a time. Much lighter than tokio::sync::Notify.
+//!
+//! 轻量级单等待者通知原语
+//!
+//! 为 SPSC（单生产者单消费者）模式优化，其中每次只有一个任务等待。
+//! 比 tokio::sync::Notify 更轻量。
+use crate::shim::atomic::{AtomicU8, Ordering};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -15,12 +15,12 @@ use std::task::{Context, Poll};
 use super::atomic_waker::AtomicWaker;
 
 // States for the notification
-const EMPTY: u8 = 0;      // No waiter, no notification
-const WAITING: u8 = 1;    // Waiter registered
-const NOTIFIED: u8 = 2;   // Notification sent
+const EMPTY: u8 = 0; // No waiter, no notification
+const WAITING: u8 = 1; // Waiter registered
+const NOTIFIED: u8 = 2; // Notification sent
 
 /// Lightweight single-waiter notifier optimized for SPSC pattern
-/// 
+///
 /// 为 SPSC 模式优化的轻量级单等待者通知器
 pub struct SingleWaiterNotify {
     state: AtomicU8,
@@ -50,7 +50,7 @@ impl Default for SingleWaiterNotify {
 
 impl SingleWaiterNotify {
     /// Create a new single-waiter notifier
-    /// 
+    ///
     /// 创建一个新的单等待者通知器
     #[inline]
     pub fn new() -> Self {
@@ -59,42 +59,42 @@ impl SingleWaiterNotify {
             waker: AtomicWaker::new(),
         }
     }
-    
+
     /// Returns a future that completes when notified
-    /// 
+    ///
     /// 返回一个在收到通知时完成的 future
     #[inline]
     pub fn notified(&self) -> Notified<'_> {
-        Notified { 
+        Notified {
             notify: self,
             registered: false,
         }
     }
-    
+
     /// Wake the waiting task (if any)
-    /// 
+    ///
     /// If called before wait, the next wait will complete immediately.
-    /// 
+    ///
     /// 唤醒等待的任务（如果有）
-    /// 
+    ///
     /// 如果在等待之前调用，下一次等待将立即完成。
     #[inline]
     pub fn notify_one(&self) {
         // Mark as notified
         let prev_state = self.state.swap(NOTIFIED, Ordering::AcqRel);
-        
+
         // If there was a waiter, wake it
         if prev_state == WAITING {
             self.waker.wake();
         }
     }
-    
+
     /// Register a waker to be notified
-    /// 
+    ///
     /// Returns true if already notified (fast path)
-    /// 
+    ///
     /// 注册一个 waker 以接收通知
-    /// 
+    ///
     /// 如果已经被通知则返回 true（快速路径）
     #[inline]
     fn register_waker(&self, waker: &std::task::Waker) -> bool {
@@ -104,23 +104,21 @@ impl SingleWaiterNotify {
         // 关键：先注册 waker，再将状态改为 WAITING
         // 这可以防止 notify_one() 看到 WAITING 但 waker 还未注册的竞态条件
         self.waker.register(waker);
-        
+
         let current_state = self.state.load(Ordering::Acquire);
-        
+
         // Fast path: already notified
         if current_state == NOTIFIED {
             // Reset to EMPTY for next wait
             self.state.store(EMPTY, Ordering::Release);
             return true;
         }
-        
+
         // Try to transition from EMPTY to WAITING
-        match self.state.compare_exchange(
-            EMPTY,
-            WAITING,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
+        match self
+            .state
+            .compare_exchange(EMPTY, WAITING, Ordering::AcqRel, Ordering::Acquire)
+        {
             Ok(_) => {
                 // Successfully transitioned to WAITING
                 // Check if we were notified immediately after setting WAITING
@@ -160,7 +158,7 @@ impl SingleWaiterNotify {
 // 无需显式的 drop 实现
 
 /// Future returned by `SingleWaiterNotify::notified()`
-/// 
+///
 /// `SingleWaiterNotify::notified()` 返回的 Future
 pub struct Notified<'a> {
     notify: &'a SingleWaiterNotify,
@@ -185,7 +183,7 @@ impl<'a> std::fmt::Debug for Notified<'a> {
 
 impl Future for Notified<'_> {
     type Output = ();
-    
+
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         // On first poll, register the waker
         if !self.registered {
@@ -206,7 +204,7 @@ impl Future for Notified<'_> {
                 return Poll::Ready(());
             }
         }
-        
+
         Poll::Pending
     }
 }
@@ -235,19 +233,19 @@ impl Drop for Notified<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom")))]
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     #[tokio::test]
     async fn test_notify_before_wait() {
         let notify = Arc::new(SingleWaiterNotify::new());
-        
+
         // Notify before waiting
         notify.notify_one();
-        
+
         // Should complete immediately
         notify.notified().await;
     }
@@ -256,13 +254,13 @@ mod tests {
     async fn test_notify_after_wait() {
         let notify = Arc::new(SingleWaiterNotify::new());
         let notify_clone = notify.clone();
-        
+
         // Spawn a task that notifies after a delay
         tokio::spawn(async move {
             sleep(Duration::from_millis(10)).await;
             notify_clone.notify_one();
         });
-        
+
         // Wait for notification
         notify.notified().await;
     }
@@ -270,14 +268,14 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_notify_cycles() {
         let notify = Arc::new(SingleWaiterNotify::new());
-        
+
         for _ in 0..10 {
             let notify_clone = notify.clone();
             tokio::spawn(async move {
                 sleep(Duration::from_millis(5)).await;
                 notify_clone.notify_one();
             });
-            
+
             notify.notified().await;
         }
     }
@@ -286,7 +284,7 @@ mod tests {
     async fn test_concurrent_notify() {
         let notify = Arc::new(SingleWaiterNotify::new());
         let notify_clone = notify.clone();
-        
+
         // Multiple notifiers (only one should wake the waiter)
         for _ in 0..5 {
             let n = notify_clone.clone();
@@ -295,18 +293,18 @@ mod tests {
                 n.notify_one();
             });
         }
-        
+
         notify.notified().await;
     }
 
     #[tokio::test]
     async fn test_notify_no_waiter() {
         let notify = SingleWaiterNotify::new();
-        
+
         // Notify with no waiter should not panic
         notify.notify_one();
         notify.notify_one();
-        
+
         // Next wait should complete immediately
         notify.notified().await;
     }
@@ -314,14 +312,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_stress_test() {
         let notify = Arc::new(SingleWaiterNotify::new());
-        
+
         for i in 0..100 {
             let notify_clone = notify.clone();
             tokio::spawn(async move {
                 sleep(Duration::from_micros(i % 10)).await;
                 notify_clone.notify_one();
             });
-            
+
             notify.notified().await;
         }
     }
@@ -332,14 +330,14 @@ mod tests {
         for _ in 0..100 {
             let notify = Arc::new(SingleWaiterNotify::new());
             let notify_clone = notify.clone();
-            
+
             let waiter = tokio::spawn(async move {
                 notify.notified().await;
             });
-            
+
             // Notify immediately (might happen before or after registration)
             notify_clone.notify_one();
-            
+
             // Should complete without timeout
             tokio::time::timeout(Duration::from_millis(100), waiter)
                 .await
@@ -348,4 +346,3 @@ mod tests {
         }
     }
 }
-

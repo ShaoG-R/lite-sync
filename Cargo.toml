@@ -1,6 +1,6 @@
 [package]
 name = "lite-sync"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["ShaoG <shaog.rs@gmail.com>"]
 description = "Fast, lightweight async primitives: SPSC channel, oneshot, notify, and atomic waker"
@@ -13,12 +13,17 @@ categories = ["asynchronous", "concurrency"]
 
 [dependencies]
 smallring = "0.1.3"
+loom = { version = "0.7.2", features = ["futures"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 futures = "0.3.31"
 tokio-test = "0.4.4"
+
+[features]
+default = []
+loom = ["dep:loom"]
 
 [[bench]]
 name = "notify_benchmark"
