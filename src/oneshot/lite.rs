@@ -156,7 +156,7 @@ impl State for () {
 /// 使用 `AtomicU8` 存储 State 可编码类型
 pub struct LiteStorage<S: State> {
     state: AtomicU8,
-    _marker: std::marker::PhantomData<S>,
+    _marker: core::marker::PhantomData<S>,
 }
 
 unsafe impl<S: State> Send for LiteStorage<S> {}
@@ -169,7 +169,7 @@ impl<S: State> OneshotStorage for LiteStorage<S> {
     fn new() -> Self {
         Self {
             state: AtomicU8::new(S::pending_value()),
-            _marker: std::marker::PhantomData,
+            _marker: core::marker::PhantomData,
         }
     }
 

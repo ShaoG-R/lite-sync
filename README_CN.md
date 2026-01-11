@@ -19,6 +19,7 @@
 - **单等待者优化**：专为常见的 SPSC（单生产者单消费者）模式优化
 - **内联存储**：支持栈分配缓冲区以避免堆分配
 - **类型安全**：利用 Rust 的类型系统在编译时强制正确性
+- **no_std 支持**：支持 `no_std` 环境（需 `alloc`）
 
 ## 安装
 
@@ -27,6 +28,15 @@
 ```toml
 [dependencies]
 lite-sync = "0.2"
+```
+
+### no_std
+
+`lite-sync` 支持 `no_std` 环境（需要 `alloc`）。在 `Cargo.toml` 中禁用默认特性：
+
+```toml
+[dependencies]
+lite-sync = { version = "0.2", default-features = false }
 ```
 
 ## 模块

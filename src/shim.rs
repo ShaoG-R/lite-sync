@@ -1,11 +1,11 @@
-//! Shim module to abstract over std and loom primitives.
+//! Shim module to abstract over core and loom primitives.
 //!
 //! This module provides a unified interface for synchronization primitives that transparently
-//! switches between `std` implementation (for production) and `loom` implementation (for testing).
+//! switches between `core` implementation (for production) and `loom` implementation (for testing).
 
 #[cfg(not(feature = "loom"))]
 pub mod atomic {
-    pub use std::sync::atomic::*;
+    pub use core::sync::atomic::*;
 }
 
 #[cfg(feature = "loom")]
@@ -17,12 +17,12 @@ pub mod atomic {
 pub mod cell {
     #[derive(Debug)]
     #[repr(transparent)]
-    pub struct UnsafeCell<T: ?Sized>(std::cell::UnsafeCell<T>);
+    pub struct UnsafeCell<T: ?Sized>(core::cell::UnsafeCell<T>);
 
     impl<T> UnsafeCell<T> {
         #[inline]
         pub const fn new(data: T) -> UnsafeCell<T> {
-            UnsafeCell(std::cell::UnsafeCell::new(data))
+            UnsafeCell(core::cell::UnsafeCell::new(data))
         }
     }
 
@@ -52,7 +52,7 @@ pub mod cell {
 
 #[cfg(not(feature = "loom"))]
 pub mod sync {
-    pub use std::sync::Arc;
+    pub use alloc::sync::Arc;
 }
 
 #[cfg(feature = "loom")]
@@ -60,7 +60,7 @@ pub mod sync {
     pub use loom::sync::Arc;
 }
 
-#[cfg(not(feature = "loom"))]
+#[cfg(all(any(feature = "std", test), not(feature = "loom")))]
 pub mod thread {
     pub use std::thread::{Thread, current, park};
 }
@@ -77,10 +77,10 @@ pub mod notify {
 
 #[cfg(feature = "loom")]
 pub mod notify {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll, Waker};
     use loom::sync::Mutex;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::task::{Context, Poll, Waker};
 
     #[derive(Debug, Default)]
     struct State {

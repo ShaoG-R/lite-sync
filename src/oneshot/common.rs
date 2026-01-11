@@ -3,10 +3,10 @@
 //! 一次性通道实现之间共享的公共类型和 trait。
 
 use crate::shim::sync::Arc;
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::fmt;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use crate::atomic_waker::AtomicWaker;
 
@@ -17,7 +17,7 @@ use crate::atomic_waker::AtomicWaker;
 pub mod error {
     //! Oneshot error types.
 
-    use std::fmt;
+    use core::fmt;
 
     /// Error returned when the sender is dropped before sending a value
     ///
@@ -31,7 +31,7 @@ pub mod error {
         }
     }
 
-    impl std::error::Error for RecvError {}
+    impl core::error::Error for RecvError {}
 
     /// Error returned from `try_recv` when no value has been sent yet or channel is closed
     ///
@@ -57,7 +57,7 @@ pub mod error {
         }
     }
 
-    impl std::error::Error for TryRecvError {}
+    impl core::error::Error for TryRecvError {}
 }
 
 pub use self::error::RecvError;
@@ -157,7 +157,7 @@ impl<S: OneshotStorage> Inner<S> {
     }
 
     #[inline]
-    pub fn register_waker(&self, waker: &std::task::Waker) {
+    pub fn register_waker(&self, waker: &core::task::Waker) {
         self.waker.register(waker);
     }
 
@@ -220,7 +220,7 @@ impl<S: OneshotStorage> Sender<S> {
     #[inline]
     pub fn send_unchecked(self, value: S::Value) {
         self.inner.send(value);
-        std::mem::forget(self);
+        core::mem::forget(self);
     }
 
     /// Check if the receiver has been closed or dropped
@@ -301,9 +301,10 @@ impl<S: OneshotStorage> Receiver<S> {
     ///
     /// 如果在异步执行上下文中调用此函数，则会 panic。
     #[inline]
+    #[cfg(any(feature = "std", feature = "loom", test))]
     pub fn blocking_recv(self) -> Result<S::Value, RecvError> {
         use crate::shim::atomic::{AtomicBool, Ordering};
-        use std::task::{RawWaker, RawWakerVTable, Waker};
+        use core::task::{RawWaker, RawWakerVTable, Waker};
 
         // Fast path: check if value is already ready
         match self.inner.storage.try_take() {

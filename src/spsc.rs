@@ -39,8 +39,8 @@ use crate::shim::atomic::{AtomicBool, Ordering};
 use crate::shim::cell::UnsafeCell;
 use crate::shim::notify::SingleWaiterNotify;
 use crate::shim::sync::Arc;
+use core::num::NonZeroUsize;
 use smallring::spsc::{Consumer, PopError, Producer, PushError, new};
-use std::num::NonZeroUsize;
 
 /// SPSC channel creation function
 ///
@@ -60,7 +60,7 @@ use std::num::NonZeroUsize;
 ///
 /// ```
 /// use lite_sync::spsc::channel;
-/// use std::num::NonZeroUsize;
+/// use core::num::NonZeroUsize;
 ///
 /// #[tokio::main]
 /// async fn main() {
@@ -156,8 +156,8 @@ struct Inner<T, const N: usize = 32> {
 // 5. Producer 和 Consumer 内部使用原子操作进行跨线程通信
 unsafe impl<T: Send, const N: usize> Sync for Inner<T, N> {}
 
-impl<T, const N: usize> std::fmt::Debug for Inner<T, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T, const N: usize> core::fmt::Debug for Inner<T, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Inner")
             .field("closed", &self.closed.load(Ordering::Acquire))
             .finish()
@@ -171,8 +171,8 @@ pub struct Sender<T, const N: usize> {
     inner: Arc<Inner<T, N>>,
 }
 
-impl<T, const N: usize> std::fmt::Debug for Sender<T, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T, const N: usize> core::fmt::Debug for Sender<T, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Sender")
             .field("closed", &self.is_closed())
             .field("len", &self.len())
@@ -188,8 +188,8 @@ pub struct Receiver<T, const N: usize> {
     inner: Arc<Inner<T, N>>,
 }
 
-impl<T, const N: usize> std::fmt::Debug for Receiver<T, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T, const N: usize> core::fmt::Debug for Receiver<T, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Receiver")
             .field("is_empty", &self.is_empty())
             .field("len", &self.len())
@@ -217,8 +217,8 @@ pub struct Drain<'a, T, const N: usize> {
     receiver: &'a mut Receiver<T, N>,
 }
 
-impl<'a, T, const N: usize> std::fmt::Debug for Drain<'a, T, N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a, T, const N: usize> core::fmt::Debug for Drain<'a, T, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Drain")
             .field("len", &self.receiver.len())
             .field("is_empty", &self.receiver.is_empty())
@@ -653,7 +653,7 @@ impl<T, const N: usize> Receiver<T, N> {
         // peek 只读取数据，不需要可变访问
         self.inner
             .consumer
-            .with(|consumer| unsafe { std::mem::transmute((*consumer).peek()) })
+            .with(|consumer| unsafe { core::mem::transmute((*consumer).peek()) })
     }
 
     /// Clear all messages from the channel
@@ -689,7 +689,7 @@ impl<T, const N: usize> Receiver<T, N> {
     ///
     /// ```
     /// use lite_sync::spsc::channel;
-    /// use std::num::NonZeroUsize;
+    /// use core::num::NonZeroUsize;
     ///
     ///     # #[tokio::main]
     ///     # async fn main() {

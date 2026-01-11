@@ -4,7 +4,7 @@
 
 use crate::shim::atomic::{AtomicU8, Ordering};
 use crate::shim::cell::UnsafeCell;
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 
 use super::common::{self, OneshotStorage, TakeResult};
 

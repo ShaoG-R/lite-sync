@@ -197,6 +197,9 @@
 //! - 用于同步的原子状态机
 //! - 原子操作的仔细排序
 //! - 全面的测试覆盖，包括并发场景
+#![cfg_attr(not(any(test, feature = "std", feature = "loom")), no_std)]
+
+extern crate alloc;
 
 pub mod atomic_waker;
 pub mod notify;

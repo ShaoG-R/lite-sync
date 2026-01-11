@@ -374,7 +374,7 @@ checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
 
 [[package]]
 name = "lite-sync"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "criterion",
  "futures",
@@ -716,9 +716,9 @@ checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 
 [[package]]
 name = "smallring"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10d61627d41fb2953036277db2552f7816773a78b46e10d36103169fc4dfbdb7"
+checksum = "c77fd78cfb627887e67dfb3f2bb4f58e9c5b79f3ee4e23c3ab6c741329f78641"
 dependencies = [
  "loom",
 ]

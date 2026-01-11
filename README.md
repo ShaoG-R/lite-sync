@@ -19,6 +19,7 @@ Fast, lightweight async primitives: SPSC channel, oneshot, notify, and atomic wa
 - **Single-waiter optimization**: Specialized for common SPSC (Single Producer Single Consumer) patterns
 - **Inline storage**: Support for stack-allocated buffers to avoid heap allocations
 - **Type-safe**: Leverages Rust's type system to enforce correctness at compile time
+- **no_std support**: Compatible with `no_std` environments (requires `alloc`)
 
 ## Installation
 
@@ -27,6 +28,15 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 lite-sync = "0.2"
+```
+
+### no_std
+
+`lite-sync` supports `no_std` environments (requires `alloc`). Disable default features in `Cargo.toml`:
+
+```toml
+[dependencies]
+lite-sync = { version = "0.2", default-features = false }
 ```
 
 ## Modules

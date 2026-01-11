@@ -8,9 +8,9 @@
 //! 为 SPSC（单生产者单消费者）模式优化，其中每次只有一个任务等待。
 //! 比 tokio::sync::Notify 更轻量。
 use crate::shim::atomic::{AtomicU8, Ordering};
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use super::atomic_waker::AtomicWaker;
 
@@ -27,8 +27,8 @@ pub struct SingleWaiterNotify {
     waker: AtomicWaker,
 }
 
-impl std::fmt::Debug for SingleWaiterNotify {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SingleWaiterNotify {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let state = self.state.load(Ordering::Acquire);
         let state_str = match state {
             EMPTY => "Empty",
@@ -97,7 +97,7 @@ impl SingleWaiterNotify {
     ///
     /// 如果已经被通知则返回 true（快速路径）
     #[inline]
-    fn register_waker(&self, waker: &std::task::Waker) -> bool {
+    fn register_waker(&self, waker: &core::task::Waker) -> bool {
         // CRITICAL: Register waker FIRST, before changing state to WAITING
         // This prevents the race where notify_one() sees WAITING but waker isn't registered yet
         //
@@ -165,8 +165,8 @@ pub struct Notified<'a> {
     registered: bool,
 }
 
-impl<'a> std::fmt::Debug for Notified<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a> core::fmt::Debug for Notified<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let state = self.notify.state.load(Ordering::Acquire);
         let state_str = match state {
             EMPTY => "Empty",

@@ -11,7 +11,7 @@
 //! 同时保持安全的并发访问。
 use crate::shim::atomic::{AtomicUsize, Ordering};
 use crate::shim::cell::UnsafeCell;
-use std::task::Waker;
+use core::task::Waker;
 
 // Waker registration states
 const WAITING: usize = 0;
@@ -148,8 +148,8 @@ impl Drop for AtomicWaker {
     }
 }
 
-impl std::fmt::Debug for AtomicWaker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for AtomicWaker {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let state = self.state.load(Ordering::Acquire);
         let state_str = match state {
             WAITING => "Waiting",
