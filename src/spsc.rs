@@ -35,9 +35,9 @@
 //! 5. **Type System Enforcement**: SPSC semantics are enforced by the type system, preventing misuse as MPMC
 //!
 //! This design achieves zero synchronization overhead, completely eliminating `Mutex` performance costs.
-use super::notify::SingleWaiterNotify;
 use crate::shim::atomic::{AtomicBool, Ordering};
 use crate::shim::cell::UnsafeCell;
+use crate::shim::notify::SingleWaiterNotify;
 use crate::shim::sync::Arc;
 use smallring::spsc::{Consumer, PopError, Producer, PushError, new};
 use std::num::NonZeroUsize;

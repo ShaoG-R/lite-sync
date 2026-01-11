@@ -69,3 +69,72 @@ pub mod thread {
 pub mod thread {
     pub use loom::thread::{Thread, current, park};
 }
+
+#[cfg(not(feature = "loom"))]
+pub mod notify {
+    pub use crate::notify::SingleWaiterNotify;
+}
+
+#[cfg(feature = "loom")]
+pub mod notify {
+    use loom::sync::Mutex;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+
+    #[derive(Debug, Default)]
+    struct State {
+        notified: bool,
+        waker: Option<Waker>,
+    }
+
+    #[derive(Debug)]
+    pub struct SingleWaiterNotify {
+        inner: Mutex<State>,
+    }
+
+    impl Default for SingleWaiterNotify {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl SingleWaiterNotify {
+        pub fn new() -> Self {
+            Self {
+                inner: Mutex::new(State::default()),
+            }
+        }
+
+        pub fn notify_one(&self) {
+            let mut state = self.inner.lock().unwrap();
+            state.notified = true;
+            if let Some(waker) = state.waker.take() {
+                waker.wake();
+            }
+        }
+
+        pub fn notified(&self) -> Notified<'_> {
+            Notified { notify: self }
+        }
+    }
+
+    pub struct Notified<'a> {
+        notify: &'a SingleWaiterNotify,
+    }
+
+    impl Future for Notified<'_> {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            let mut state = self.notify.inner.lock().unwrap();
+            if state.notified {
+                state.notified = false;
+                Poll::Ready(())
+            } else {
+                state.waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+    }
+}
